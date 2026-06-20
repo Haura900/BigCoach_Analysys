@@ -383,7 +383,7 @@
     const game = page.defaultView?.MM?.GS;
     if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
     const previous = { showMortal: Boolean(game.showMortal), showHands: Boolean(game.showHands) };
-    const desiredMortal = false;
+    const desiredMortal = mode === "back";
     const desiredHands = mode === "back";
     if (Boolean(game.showMortal) !== desiredMortal) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     if (Boolean(game.showHands) !== desiredHands) page.querySelector("#toggle-hands")?.click();
@@ -391,9 +391,20 @@
     const frame = document.querySelector("iframe[title='Analysis Result']");
     const frameRect = frame.getBoundingClientRect();
     const gameRect = page.querySelector(".grid-main")?.getBoundingClientRect();
+    const bodyText = String(page.body?.innerText || "");
+    const probability = (label) => {
+      const match = bodyText.match(new RegExp(`${label}\\s*([0-9.]+)%`));
+      return match ? Number(match[1]) : null;
+    };
     return {
       previous,
       hiddenOuterCount: hiddenOuter.length,
+      outcomes: mode === "back" ? {
+        draw: probability("流局確率"),
+        movement: probability("横移動確率"),
+        dealIn: probability("放銃確率"),
+        win: probability("和了確率")
+      } : null,
       rect: mode === "front" && gameRect ? {
         x: Math.max(0, Math.floor(frameRect.x + gameRect.x)),
         y: Math.max(0, Math.floor(frameRect.y + gameRect.y)),

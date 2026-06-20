@@ -338,6 +338,7 @@ function candidateTable(title, analysis, mediaMode = "preview") {
 async function prepareCardImages() {
   await ensureAdapter();
   let frontState;
+  let backState;
   try {
     frontState = await bigCoachView.webContents.executeJavaScript(
       "window.__bigcoachDesktop.prepareCapture('front')", true
@@ -345,13 +346,14 @@ async function prepareCardImages() {
     const frontImage = frontState.rect
       ? await bigCoachView.webContents.capturePage(frontState.rect)
       : await bigCoachView.webContents.capturePage();
-    await bigCoachView.webContents.executeJavaScript(
+    backState = await bigCoachView.webContents.executeJavaScript(
       "window.__bigcoachDesktop.prepareCapture('back')", true
     );
     const backImage = await bigCoachView.webContents.capturePage();
     currentCardImages = {
       frontDataUrl: frontImage.toDataURL(),
-      backDataUrl: backImage.toDataURL()
+      backDataUrl: backImage.toDataURL(),
+      outcomes: backState?.outcomes || null
     };
     return currentCardImages;
   } finally {
@@ -369,17 +371,37 @@ function judgmentPrompt(scene) {
   return "何切？";
 }
 
+function outcomeProbabilitiesHtml(outcomes) {
+  const items = [
+    ["流局確率", outcomes?.draw],
+    ["横移動確率", outcomes?.movement],
+    ["放銃確率", outcomes?.dealIn],
+    ["和了確率", outcomes?.win]
+  ];
+  if (items.every(([, value]) => !Number.isFinite(value))) {
+    return `<p>BigCoachの局面結果確率を取得できませんでした。</p>`;
+  }
+  return `<div style="display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:8px;margin:12px 0">
+    ${items.map(([label, value]) => `<div style="padding:10px;border:1px solid #ddd;border-radius:8px;text-align:center">
+      <div style="font-size:13px">${label}</div>
+      <strong style="font-size:22px">${Number.isFinite(value) ? `${value.toFixed(1)}%` : "—"}</strong>
+    </div>`).join("")}
+  </div>`;
+}
+
 function cardHtml(scene, simulation, memo, images, mediaMode = "preview") {
   const comparison = comparisonStatus(scene, simulation);
   const front = `
     <div class="bigcoach-card">
       <div style="font-size:1px;color:#fff">BigCoach:${escapeHtml(scene.sceneId)}</div>
-      <img src="${escapeHtml(images.front)}" style="max-width:100%">
       <h2 style="text-align:center;font-size:28px">${judgmentPrompt(scene)}</h2>
+      <img src="${escapeHtml(images.front)}" style="max-width:100%">
     </div>`;
   const back = `
     <div class="bigcoach-card">
+      <h2>メモ</h2><div>${escapeHtml(memo || "（なし）").replace(/\n/g, "<br>")}</div>
       <img src="${escapeHtml(images.back)}" style="max-width:100%">
+      ${outcomeProbabilitiesHtml(images.outcomes)}
       <h2>何切る比較</h2>
       <p>実打: ${tileHtml(comparison.actual, mediaMode)} / BigCoach推奨: ${tileHtml(comparison.bigCoach, mediaMode)} / シミュレーター推奨: ${tileHtml(comparison.simulator, mediaMode)}</p>
       <p>BigCoachとシミュレーター: <strong>${comparison.bigCoachMatchesSimulator ? "一致" : "不一致"}</strong></p>
@@ -387,7 +409,6 @@ function cardHtml(scene, simulation, memo, images, mediaMode = "preview") {
       <p>大悪手: ${scene.majorMistake?.isMajor ? "該当" : "非該当"} (${escapeHtml(scene.majorMistake?.reason || "判定不可")})</p>
       ${candidateTable("何切る結果（見えている牌を残り枚数から除外）", simulation?.withWall, mediaMode)}
       ${candidateTable("何切る結果（残り枚数を補正しない）", simulation?.withoutWall, mediaMode)}
-      <h3>メモ</h3><div>${escapeHtml(memo).replace(/\n/g, "<br>")}</div>
       <hr><p><a href="${escapeHtml(scene.url)}">BigCoach解析結果</a></p>
       <p>局面ID: ${escapeHtml(scene.sceneId)}</p>
     </div>`;
@@ -506,7 +527,8 @@ function registerIpc() {
     return {
       ...cardHtml(scene, currentSimulation, memo, {
         front: images.frontDataUrl,
-        back: images.backDataUrl
+        back: images.backDataUrl,
+        outcomes: images.outcomes
       }),
       duplicates,
       simulation: currentSimulation,
@@ -536,7 +558,8 @@ function registerIpc() {
     }));
     const html = cardHtml(scene, currentSimulation, payload.memo || "", {
       front: frontName,
-      back: backName
+      back: backName,
+      outcomes: images.outcomes
     }, "anki");
     return anki.add({
       settings,

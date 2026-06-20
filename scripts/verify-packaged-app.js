@@ -55,90 +55,6 @@ async function main() {
   mark("opened");
   console.error("step: opened");
   await new Promise((resolve) => setTimeout(resolve, 2500));
-  const internals = await bigCoach.evaluate(`(()=>{
-    const frame=document.querySelector("iframe[title='Analysis Result']");
-    const view=frame?.contentWindow;
-    const game=view?.MM?.GS;
-    return {
-      outerUrl:location.href,
-      title:document.title,
-      bodyText:document.body?.innerText?.slice(0,500) || "",
-      iframes:[...document.querySelectorAll("iframe")].map((item)=>({
-        title:item.title, src:item.src, id:item.id, name:item.name
-      })),
-      frameSrc:frame?.src || null,
-      frameReady:frame?.contentDocument?.readyState || null,
-      hasMM:Boolean(view?.MM),
-      mmKeys:Object.keys(view?.MM || {}),
-      hasGS:Boolean(game),
-      gsKeys:Object.keys(game || {}),
-      hasFullData:Boolean(game?.fullData),
-      geHands:Array.isArray(game?.ge) ? game.ge.length : null,
-      percentElements:[...frame?.contentDocument?.querySelectorAll("body *") || []]
-        .filter((element)=>/%/.test(element.textContent || "") && element.children.length === 0)
-        .slice(0,30)
-        .map((element)=>({
-          tag:element.tagName,
-          className:String(element.className || ""),
-          id:element.id,
-          text:(element.textContent || "").trim(),
-          parentClass:String(element.parentElement?.className || "")
-        })),
-      currentEval:(()=>{
-        const entry=game?.ge?.flat()?.find((event)=>event?.mortalEval)?.mortalEval;
-        return entry ? {
-          keys:Object.keys(entry),
-          detailKeys:(entry.details || []).map((item)=>Object.keys(item)),
-          details:(entry.details || []).map((item)=>({
-            action:item.action,
-            metrics:Object.fromEntries(Object.entries(item).filter(([key,value])=>
-              typeof value === "number" && key !== "q_value" && key !== "prob"))
-          }))
-        } : null;
-      })(),
-      adapter:Boolean(window.__bigcoachDesktop)
-    };
-  })()`);
-  internals.adapterProbe = await bigCoach.evaluate(`Promise.race([
-    window.__bigcoachDesktop.listDecisions()
-      .then((items)=>({ok:true,count:items.length,first:items[0]}))
-      .catch((error)=>({ok:false,error:error.stack || error.message})),
-    new Promise((resolve)=>setTimeout(()=>resolve({ok:false,error:"timeout"}),5000))
-  ])`);
-  internals.graphProbe = await bigCoach.evaluate(`(async()=>{
-    await window.__bigcoachDesktop.goToPosition(0,4);
-    const frame=document.querySelector("iframe[title='Analysis Result']");
-    const page=frame.contentDocument;
-    const game=frame.contentWindow.MM.GS;
-    if (!game.showMortal) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click",{bubbles:true}));
-    await new Promise((resolve)=>setTimeout(resolve,200));
-    return {
-      showMortal:game.showMortal,
-      text:page.body.innerText.slice(-1200),
-      leaves:[...page.querySelectorAll("body *")]
-        .filter((element)=>element.children.length===0 && (element.textContent || "").trim())
-        .slice(-80)
-        .map((element)=>({
-          tag:element.tagName,
-          className:String(element.className || ""),
-          id:element.id,
-          text:(element.textContent || "").trim()
-        }))
-    };
-  })()`);
-  internals.scrapeProbe = await bigCoach.evaluate(`Promise.race([
-    window.__bigcoachDesktop.scrape()
-      .then((scene)=>({ok:true,roundText:scene.roundText,hands:scene.handsBySeat?.map((hand)=>hand.length)}))
-      .catch((error)=>({ok:false,error:error.stack || error.message})),
-    new Promise((resolve)=>setTimeout(()=>resolve({ok:false,error:"timeout"}),5000))
-  ])`);
-  mark(`internals ${JSON.stringify(internals)}`);
-  if (process.env.VERIFY_INTERNALS_ONLY === "1") {
-    console.log(JSON.stringify(internals, null, 2));
-    bigCoach.close();
-    panel.close();
-    return;
-  }
   const automaticStatsText = await panel.evaluate("document.querySelector('#current-shin-rate').textContent");
   const first = await panel.evaluate("window.bigcoachApp.refreshScene()");
   mark("scene");
@@ -156,6 +72,20 @@ async function main() {
   console.error("step: preview");
   const tileImagesInBack = (preview.back.match(/<img src="data:image\/png;base64/g) || []).length;
   if (tileImagesInBack < 3) throw new Error("Card back does not contain tile images");
+  const frontPromptIndex = preview.front.search(/何切？|副露？|リーチ？/);
+  const frontImageIndex = preview.front.indexOf("<img");
+  if (frontPromptIndex < 0 || frontPromptIndex > frontImageIndex) throw new Error("Front prompt is not above the image");
+  const backMemoIndex = preview.back.indexOf("<h2>メモ</h2>");
+  const backImageIndex = preview.back.indexOf("<img");
+  const outcomeIndex = preview.back.indexOf("流局確率");
+  const comparisonIndex = preview.back.indexOf("<h2>何切る比較</h2>");
+  if (!(backMemoIndex >= 0 && backMemoIndex < backImageIndex &&
+      backImageIndex < outcomeIndex && outcomeIndex < comparisonIndex)) {
+    throw new Error("Card back sections are not in the required order");
+  }
+  const outcomeSection = preview.back.slice(outcomeIndex, comparisonIndex);
+  const outcomeValues = [...outcomeSection.matchAll(/([0-9.]+)%/g)].map((match) => match[1]);
+  if (outcomeValues.length !== 4) throw new Error("Four BigCoach outcome probabilities were not captured");
   const frontData = preview.front.match(/data:image\/png;base64,([^"']+)/)?.[1];
   const backData = preview.back.match(/data:image\/png;base64,([^"']+)/)?.[1];
   if (frontData) fs.writeFileSync("verify-front.png", Buffer.from(frontData, "base64"));
@@ -196,7 +126,10 @@ async function main() {
       front: /data:image\/png;base64,/.test(preview.front),
       back: /data:image\/png;base64,/.test(preview.back),
       resultTileImages: tileImagesInBack,
-      prompt: /何切？|副露？|リーチ？/.test(preview.front)
+      prompt: /何切？|副露？|リーチ？/.test(preview.front),
+      outcomeProbabilities: ["流局確率", "横移動確率", "放銃確率", "和了確率"]
+        .every((label) => preview.back.includes(label)),
+      outcomeValues
     },
     dialog
   }, null, 2));
