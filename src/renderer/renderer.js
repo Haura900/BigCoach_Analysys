@@ -1,6 +1,7 @@
 "use strict";
 
 const state = { settings: null, scene: null, simulation: null, activeTab: "wall" };
+state.majorMistakes = [];
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -51,8 +52,9 @@ function renderScene(scene) {
     `推奨 ${scene.recommendedDiscard || "取得なし"}`
   ];
   if (scene.shinMistake?.enabled) chips.push(scene.shinMistake.isShin ? "シン悪手" : "非シン悪手");
+  if (scene.majorMistake?.isMajor) chips.push("大悪手");
   $("#scene-chips").innerHTML = chips.map((text, index) =>
-    `<span class="chip ${index === chips.length - 1 && scene.shinMistake?.isShin ? "shin" : ""}">${escapeHtml(text)}</span>`).join("");
+    `<span class="chip ${text === "大悪手" || text === "シン悪手" ? "shin" : ""}">${escapeHtml(text)}</span>`).join("");
   const missing = $("#missing-info");
   missing.classList.toggle("hidden", !scene.missing.length);
   missing.textContent = scene.missing.length
@@ -60,7 +62,9 @@ function renderScene(scene) {
     : "";
   $("#shin-status").textContent = `シン悪手: ${scene.shinMistake?.enabled ?
     `${scene.shinMistake.isShin ? "該当" : "非該当"} — ${scene.shinMistake.reason}` :
-    `判定不可 — ${scene.shinMistake?.reason || "評価なし"}`}。定義: BigCoach推奨と実打の評価差が設定基準以上。`;
+    `判定不可 — ${scene.shinMistake?.reason || "評価なし"}`}。大悪手: ${
+      scene.majorMistake?.isMajor ? "該当" : "非該当"
+    } — ${scene.majorMistake?.reason || "評価なし"}。`;
   renderResults();
 }
 
@@ -165,6 +169,36 @@ $("#run-simulation").addEventListener("click", () => action("何切るシミュ�
   toast("シミュレーターが完了しました");
 }));
 
+function renderMajorMistakes(result) {
+  state.majorMistakes = result.items;
+  $("#major-mistakes-definition").textContent = `大悪手の定義: ${result.definition}`;
+  $("#major-mistakes-list").innerHTML = result.items.length
+    ? result.items.map((item, index) => `<button class="major-mistake" data-mismatch="${item.mismatchOrdinal}">
+        <span class="round">${escapeHtml(item.roundText)}</span>
+        <span>${item.turn}巡目</span>
+        <span class="choice">${escapeHtml(item.actual || "—")} → ${escapeHtml(item.recommended || "—")}</span>
+        <span class="metric">#${index + 1} ${escapeHtml(item.reason)}</span>
+      </button>`).join("")
+    : "<div class='definition'>現在の基準に該当する大悪手はありません。</div>";
+  $$(".major-mistake").forEach((button) => button.addEventListener("click", () =>
+    action("大悪手局面へ移動中...", async () => {
+      renderScene(await window.bigcoachApp.goToMajorMistake(Number(button.dataset.mismatch)));
+      toast("大悪手局面へ移動しました");
+    })));
+}
+
+$("#major-mistakes-toggle").addEventListener("click", () => action("大悪手を抽出中...", async () => {
+  const panel = $("#major-mistakes-panel");
+  if (!panel.classList.contains("hidden")) {
+    panel.classList.add("hidden");
+    $("#major-mistakes-toggle").textContent = "大悪手一覧を表示";
+    return;
+  }
+  renderMajorMistakes(await window.bigcoachApp.listMajorMistakes());
+  panel.classList.remove("hidden");
+  $("#major-mistakes-toggle").textContent = `大悪手一覧を隠す（${state.majorMistakes.length}件）`;
+}));
+
 $$(".tab").forEach((button) => button.addEventListener("click", () => {
   state.activeTab = button.dataset.tab;
   $$(".tab").forEach((item) => item.classList.toggle("active", item === button));
@@ -191,7 +225,7 @@ $("#settings-save").addEventListener("click", async (event) => {
     data[name] = form.elements.namedItem(name).checked;
   }
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
-  for (const name of ["shinMistakeThreshold", "shinSearchLimit", "simulatorTimeoutSec"]) data[name] = Number(data[name]);
+  for (const name of ["shinMistakeThreshold", "shinSearchLimit", "simulatorTimeoutSec", "majorMistakeQGap", "majorMistakeMaxProbability"]) data[name] = Number(data[name]);
   state.settings = await action("設定を保存中...", () => window.bigcoachApp.saveSettings(data));
   $("#settings-dialog").close();
   toast("設定を保存しました。表示言語の変更はBigCoach再読込後に反映されます。");

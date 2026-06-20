@@ -80,6 +80,7 @@ function normalizeScene(raw, url) {
     recommendedDiscard,
     candidates,
     aiSummary: raw.aiSummary || "",
+    sourcePosition: raw.sourcePosition || null,
     missing: [],
     diagnostics: raw.diagnostics || {}
   };
@@ -89,7 +90,8 @@ function normalizeCandidates(candidates) {
   return candidates
     .map((item) => ({
       tile: item.tile || null,
-      value: Number.isFinite(Number(item.value)) ? Number(item.value) : null,
+      value: item.value != null && Number.isFinite(Number(item.value)) ? Number(item.value) : null,
+      qValue: item.qValue != null && Number.isFinite(Number(item.qValue)) ? Number(item.qValue) : null,
       label: item.label || "",
       raw: item.raw || ""
     }))

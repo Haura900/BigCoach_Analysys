@@ -40,6 +40,7 @@ button.primary:hover { background: var(--accent-hover); }
 button.ghost { background: transparent; }
 button.small { padding: 5px 8px; font-size: 12px; }
 button.action { width: 100%; padding: 11px; }
+button.danger-action { width: 100%; margin-top: 9px; border-color: #8e4148; background: #402329; color: #ffc4c7; }
 .header-actions { display: flex; gap: 6px; }
 .navigation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .scene-title { font-size: 14px; font-weight: 700; margin-bottom: 8px; }
@@ -48,6 +49,11 @@ button.action { width: 100%; padding: 11px; }
 .chip.shin { border-color: var(--danger); color: #ff9aa0; }
 .notice { margin-top: 8px; border-left: 3px solid var(--warning); background: #2b2518; color: #f8d98d; padding: 8px; font-size: 12px; white-space: pre-wrap; }
 .definition { color: var(--muted); font-size: 11px; margin-top: 8px; line-height: 1.45; }
+.major-mistakes { margin-top: 8px; max-height: 340px; overflow: auto; border-top: 1px solid var(--border); }
+.major-mistake { width: 100%; display: grid; grid-template-columns: 72px 52px 1fr; gap: 7px; align-items: center; margin-top: 6px; text-align: left; font-size: 12px; }
+.major-mistake .round { color: #ffb4b9; font-weight: 700; }
+.major-mistake .choice { font-family: Consolas, monospace; }
+.major-mistake .metric { color: var(--muted); font-size: 10px; grid-column: 1 / -1; }
 .comparison { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 9px; }
 .comparison-item { background: #111821; border: 1px solid var(--border); border-radius: 7px; padding: 7px; text-align: center; }
 .comparison-item strong { display: block; font: 18px Consolas, monospace; margin-top: 3px; }

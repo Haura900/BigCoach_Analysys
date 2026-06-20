@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const { normalizeScene, validateScene, shinMistake } = require("./lib/scene");
 const { SimulatorService } = require("./lib/simulator");
 const { AnkiService } = require("./lib/anki");
+const { classifyMajorMistake, listMajorMistakes } = require("./lib/mistakes");
 
 const DEFAULT_SETTINGS = {
   deckName: "BigCoach",
@@ -21,6 +22,8 @@ const DEFAULT_SETTINGS = {
   simulatorTimeoutSec: 30,
   shinMistakeThreshold: 0.08,
   shinSearchLimit: 60,
+  majorMistakeQGap: 2,
+  majorMistakeMaxProbability: 0.01,
   panelWidth: 500
 };
 
@@ -29,6 +32,7 @@ let bigCoachView;
 let settings;
 let currentScene;
 let currentSimulation;
+let currentMajorMistakes = [];
 let simulator;
 let anki;
 let adapterSource;
@@ -84,11 +88,23 @@ async function captureScene() {
   await ensureAdapter();
   const raw = await bigCoachView.webContents.executeJavaScript("window.__bigcoachDesktop.scrape()", true);
   const normalized = validateScene(normalizeScene(raw, bigCoachView.webContents.getURL()));
+  const actualCandidate = normalized.candidates.find((item) => item.tile === normalized.actualDiscard);
+  const recommendedCandidate = normalized.candidates.find((item) => item.tile === normalized.recommendedDiscard) ||
+    normalized.candidates[0];
+  const majorMistake = classifyMajorMistake({
+    actual: normalized.actualDiscard,
+    recommended: normalized.recommendedDiscard,
+    actualProbability: actualCandidate?.value ?? null,
+    qGap: recommendedCandidate?.qValue != null && actualCandidate?.qValue != null
+      ? recommendedCandidate.qValue - actualCandidate.qValue
+      : null
+  }, settings);
   const screenshot = await bigCoachView.webContents.capturePage();
   currentScene = {
     ...normalized,
     screenshotDataUrl: screenshot.toDataURL(),
-    shinMistake: shinMistake(normalized, settings)
+    shinMistake: shinMistake(normalized, settings),
+    majorMistake
   };
   currentSimulation = null;
   return currentScene;
@@ -118,6 +134,28 @@ async function navigate(kind) {
     throw new Error(`${limit}局面以内にシン悪手を見つけられませんでした。`);
   }
   return navigateOnce(kind);
+}
+
+async function loadMajorMistakes() {
+  await ensureAdapter();
+  const mistakes = await bigCoachView.webContents.executeJavaScript(
+    "window.__bigcoachDesktop.listMistakes()", true
+  );
+  currentMajorMistakes = listMajorMistakes(mistakes, settings);
+  return {
+    items: currentMajorMistakes,
+    definition: `実打とAI推奨が異なり、Q値差が${settings.majorMistakeQGap}以上、実打確率が${Number(settings.majorMistakeMaxProbability) * 100}%以下`
+  };
+}
+
+async function goToMajorMistake(mismatchOrdinal) {
+  await ensureAdapter();
+  const result = await bigCoachView.webContents.executeJavaScript(
+    `window.__bigcoachDesktop.goToMismatch(${Number(mismatchOrdinal)})`, true
+  );
+  if (!result.ok) throw new Error(result.reason || "大悪手局面へ移動できませんでした。");
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  return captureScene();
 }
 
 function comparisonStatus(scene, simulation) {
@@ -172,6 +210,7 @@ function cardHtml(scene, simulation, memo, imageName = null) {
       <p>実打: ${tileHtml(comparison.actual)} / BigCoach推奨: ${tileHtml(comparison.bigCoach)} / シミュレーター推奨: ${tileHtml(comparison.simulator)}</p>
       <p>BigCoachとシミュレーター: <strong>${comparison.bigCoachMatchesSimulator ? "一致" : "不一致"}</strong></p>
       <p>シン悪手: ${scene.shinMistake.enabled ? (scene.shinMistake.isShin ? "該当" : "非該当") : "判定不可"} (${escapeHtml(scene.shinMistake.reason)})</p>
+      <p>大悪手: ${scene.majorMistake?.isMajor ? "該当" : "非該当"} (${escapeHtml(scene.majorMistake?.reason || "判定不可")})</p>
       <h3>BigCoach候補</h3>${bigCoachCandidates}
       ${candidateTable("何切る結果（見えている牌を残り枚数から除外）", simulation?.withWall)}
       ${candidateTable("何切る結果（残り枚数を補正しない）", simulation?.withoutWall)}
@@ -221,6 +260,8 @@ function registerIpc() {
   ipcMain.handle("app:get-state", async () => ({ settings, scene: currentScene, simulation: currentSimulation }));
   ipcMain.handle("bigcoach:scene", () => captureScene());
   ipcMain.handle("bigcoach:navigate", (_event, kind) => navigate(kind));
+  ipcMain.handle("bigcoach:major-mistakes", () => loadMajorMistakes());
+  ipcMain.handle("bigcoach:go-to-mistake", (_event, ordinal) => goToMajorMistake(ordinal));
   ipcMain.handle("bigcoach:reload", async () => {
     await bigCoachView.webContents.loadURL(bigCoachUrl());
     return true;

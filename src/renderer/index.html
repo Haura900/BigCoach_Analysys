@@ -40,6 +40,11 @@
         <button data-nav="nextShin">次のシン悪手</button>
       </div>
       <div id="shin-status" class="definition">シン悪手: BigCoach推奨と実打の評価差が設定基準以上の局面。</div>
+      <button id="major-mistakes-toggle" class="danger-action action">大悪手一覧を表示</button>
+      <div id="major-mistakes-panel" class="major-mistakes hidden">
+        <div id="major-mistakes-definition" class="definition"></div>
+        <div id="major-mistakes-list"></div>
+      </div>
     </section>
 
     <section>
@@ -79,6 +84,8 @@
         <label>シン悪手評価差<input name="shinMistakeThreshold" type="number" min="0" step="0.001"></label>
         <label>シン悪手探索上限<input name="shinSearchLimit" type="number" min="1" max="500"></label>
         <label>解析タイムアウト（秒）<input name="simulatorTimeoutSec" type="number" min="3" max="300"></label>
+        <label>大悪手 Q値差<input name="majorMistakeQGap" type="number" min="0" step="0.1"></label>
+        <label>大悪手 実打確率上限<input name="majorMistakeMaxProbability" type="number" min="0" max="1" step="0.001"></label>
       </div>
       <fieldset>
         <legend>何切るシミュレーター</legend>

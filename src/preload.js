@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("bigcoachApp", {
   getState: () => ipcRenderer.invoke("app:get-state"),
   navigate: (direction) => ipcRenderer.invoke("bigcoach:navigate", direction),
+  listMajorMistakes: () => ipcRenderer.invoke("bigcoach:major-mistakes"),
+  goToMajorMistake: (mismatchOrdinal) => ipcRenderer.invoke("bigcoach:go-to-mistake", mismatchOrdinal),
   refreshScene: () => ipcRenderer.invoke("bigcoach:scene"),
   runSimulation: () => ipcRenderer.invoke("simulator:run"),
   diagnose: () => ipcRenderer.invoke("app:diagnose"),
