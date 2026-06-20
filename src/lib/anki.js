@@ -49,9 +49,9 @@ class AnkiService {
     return this.invoke("findNotes", { query: `tag:${this.duplicateTag(sceneId)}` });
   }
 
-  async storeImage(dataUrl, sceneId) {
+  async storeImage(dataUrl, sceneId, suffix = "") {
     const data = String(dataUrl).replace(/^data:image\/png;base64,/, "");
-    const filename = `bigcoach_${sceneId}.png`;
+    const filename = `bigcoach_${sceneId}${suffix ? `_${suffix}` : ""}.png`;
     await this.invoke("storeMediaFile", { filename, data }, 15000);
     return filename;
   }

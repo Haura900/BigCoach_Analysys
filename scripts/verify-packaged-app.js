@@ -1,4 +1,5 @@
 "use strict";
+const fs = require("node:fs");
 
 async function connect(webSocketDebuggerUrl) {
   const socket = new WebSocket(webSocketDebuggerUrl);
@@ -46,16 +47,25 @@ async function main() {
   if (!bigCoachTarget || !panelTarget) throw new Error("Required Electron targets not found");
   const bigCoach = await connect(bigCoachTarget.webSocketDebuggerUrl);
   const panel = await connect(panelTarget.webSocketDebuggerUrl);
-  await bigCoach.send("Page.navigate", { url: reviewUrl });
-  await new Promise((resolve) => setTimeout(resolve, 10000));
-
+  const opened = await panel.evaluate(`window.bigcoachApp.openReviewUrl(${JSON.stringify(reviewUrl)})`);
+  await new Promise((resolve) => setTimeout(resolve, 1500));
   const first = await panel.evaluate("window.bigcoachApp.refreshScene()");
+  const stats = await panel.evaluate("window.bigcoachApp.refreshStats()");
   const major = await panel.evaluate("window.bigcoachApp.listMajorMistakes()");
   if (!major.items.length) throw new Error("No major mistakes found");
-  const target = major.items[Math.min(10, major.items.length - 1)];
-  const jumped = await panel.evaluate(`window.bigcoachApp.goToMajorMistake(${target.mismatchOrdinal})`);
-  const simulation = await panel.evaluate("window.bigcoachApp.runSimulation()");
+  const jumped = await panel.evaluate("window.bigcoachApp.navigate('nextMajor')");
+  const preview = await panel.evaluate("window.bigcoachApp.previewCard('verification')");
+  const frontData = preview.front.match(/data:image\/png;base64,([^"']+)/)?.[1];
+  const backData = preview.back.match(/data:image\/png;base64,([^"']+)/)?.[1];
+  if (frontData) fs.writeFileSync("verify-front.png", Buffer.from(frontData, "base64"));
+  if (backData) fs.writeFileSync("verify-back.png", Buffer.from(backData, "base64"));
+  const shin = await panel.evaluate("window.bigcoachApp.navigate('nextShin')");
+  await panel.evaluate("document.querySelector('#settings-open').click()");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const dialog = await panel.evaluate(`(()=>{const d=document.querySelector('#settings-dialog');const r=d.getBoundingClientRect();return {open:d.open,width:r.width,height:r.height,left:r.left,top:r.top}})()`);
+  await panel.evaluate("document.querySelector('#settings-dialog').close()");
   console.log(JSON.stringify({
+    historyCount: opened.history.length,
     first: {
       roundText: first.roundText,
       turn: first.currentTurn,
@@ -64,6 +74,7 @@ async function main() {
       recommended: first.recommendedDiscard
     },
     majorMistakes: major.items.length,
+    stats,
     jumped: {
       roundText: jumped.roundText,
       turn: jumped.currentTurn,
@@ -71,7 +82,17 @@ async function main() {
       recommended: jumped.recommendedDiscard,
       isMajor: jumped.majorMistake?.isMajor
     },
-    simulator: simulation.comparison
+    shin: {
+      roundText: shin.roundText,
+      turn: shin.currentTurn,
+      isShin: shin.shinMistake?.isShin
+    },
+    simulator: preview.comparison,
+    cardImages: {
+      front: /data:image\/png;base64,/.test(preview.front),
+      back: /data:image\/png;base64,/.test(preview.back)
+    },
+    dialog
   }, null, 2));
   bigCoach.close();
   panel.close();

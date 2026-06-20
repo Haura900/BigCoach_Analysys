@@ -1,13 +1,22 @@
 "use strict";
 
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, session } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
-const crypto = require("node:crypto");
-const { normalizeScene, validateScene, shinMistake } = require("./lib/scene");
+const { normalizeScene, validateScene } = require("./lib/scene");
 const { SimulatorService } = require("./lib/simulator");
 const { AnkiService } = require("./lib/anki");
-const { classifyMajorMistake, listMajorMistakes } = require("./lib/mistakes");
+const {
+  classifyShinMistake,
+  classifyMajorMistake,
+  listShinMistakes,
+  listMajorMistakes
+} = require("./lib/mistakes");
+const {
+  buildRoundRecords,
+  mergeRoundRecords,
+  summarizeRecords
+} = require("./lib/stats");
 
 const DEFAULT_SETTINGS = {
   deckName: "BigCoach",
@@ -20,10 +29,7 @@ const DEFAULT_SETTINGS = {
   enableTegawari: true,
   enableRiichi: false,
   simulatorTimeoutSec: 30,
-  shinMistakeThreshold: 0.08,
-  shinSearchLimit: 60,
-  majorMistakeQGap: 2,
-  majorMistakeMaxProbability: 0.01,
+  shinMistakeThreshold: 0.1,
   panelWidth: 500
 };
 
@@ -33,6 +39,8 @@ let settings;
 let currentScene;
 let currentSimulation;
 let currentMajorMistakes = [];
+let currentDecisions = [];
+let currentCardImages;
 let simulator;
 let anki;
 let adapterSource;
@@ -45,6 +53,23 @@ function log(message) {
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
+}
+
+function statsPath() {
+  return path.join(app.getPath("userData"), "shin-stats.json");
+}
+
+function historyPath() {
+  return path.join(app.getPath("userData"), "review-history.json");
+}
+
+function readJson(filePath, fallback) {
+  try { return JSON.parse(fs.readFileSync(filePath, "utf8")); } catch { return fallback; }
+}
+
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
 function loadSettings() {
@@ -71,6 +96,27 @@ function bigCoachUrl() {
   return `https://review.bigcoach.work/?lang=${encodeURIComponent(settings.language || "ja")}`;
 }
 
+function validateReviewUrl(value) {
+  let url;
+  try { url = new URL(String(value || "").trim()); } catch {
+    throw new Error("解析結果URLが正しくありません。");
+  }
+  if (url.protocol !== "https:" || url.hostname !== "review.bigcoach.work" ||
+      !url.pathname.startsWith("/review/")) {
+    throw new Error("https://review.bigcoach.work/review/... のURLを入力してください。");
+  }
+  return url.href;
+}
+
+function saveReviewHistory(url) {
+  if (!url.includes("/review/")) return readJson(historyPath(), []);
+  const history = readJson(historyPath(), []).filter((item) => item.url !== url);
+  history.unshift({ url, openedAt: new Date().toISOString() });
+  const limited = history.slice(0, 50);
+  writeJson(historyPath(), limited);
+  return limited;
+}
+
 function layoutViews() {
   if (!mainWindow || !bigCoachView) return;
   const [width, height] = mainWindow.getContentSize();
@@ -91,71 +137,93 @@ async function captureScene() {
   const actualCandidate = normalized.candidates.find((item) => item.tile === normalized.actualDiscard);
   const recommendedCandidate = normalized.candidates.find((item) => item.tile === normalized.recommendedDiscard) ||
     normalized.candidates[0];
-  const majorMistake = classifyMajorMistake({
+  const decision = {
     actual: normalized.actualDiscard,
     recommended: normalized.recommendedDiscard,
     actualProbability: actualCandidate?.value ?? null,
-    qGap: recommendedCandidate?.qValue != null && actualCandidate?.qValue != null
-      ? recommendedCandidate.qValue - actualCandidate.qValue
-      : null
-  }, settings);
+    isBad: Boolean(normalized.actualDiscard && normalized.recommendedDiscard &&
+      normalized.actualDiscard !== normalized.recommendedDiscard),
+    shanten: normalized.shanten,
+    atSelfRiichi: normalized.atSelfRiichi,
+    ownRiichiMoment: normalized.ownRiichiMoment,
+    opponentRiichi: normalized.opponentRiichi
+  };
   const screenshot = await bigCoachView.webContents.capturePage();
   currentScene = {
     ...normalized,
     screenshotDataUrl: screenshot.toDataURL(),
-    shinMistake: shinMistake(normalized, settings),
-    majorMistake
+    shinMistake: classifyShinMistake(decision, settings),
+    majorMistake: classifyMajorMistake(decision)
   };
   currentSimulation = null;
+  currentCardImages = null;
   return currentScene;
 }
 
-async function navigateOnce(kind) {
+async function loadDecisions() {
+  await ensureAdapter();
+  currentDecisions = await bigCoachView.webContents.executeJavaScript(
+    "window.__bigcoachDesktop.listDecisions()", true
+  );
+  return currentDecisions;
+}
+
+function comparePosition(left, right) {
+  return (left.handCounter - right.handCounter) || (left.plyCounter - right.plyCounter);
+}
+
+async function goToDecision(decision) {
   await ensureAdapter();
   const result = await bigCoachView.webContents.executeJavaScript(
-    `window.__bigcoachDesktop.navigate(${JSON.stringify(kind)})`, true
+    `window.__bigcoachDesktop.goToPosition(${Number(decision.handCounter)},${Number(decision.plyCounter)})`, true
   );
-  if (!result.ok) throw new Error(`${result.reason}。BigCoach側のUI変更の可能性があります。`);
-  await new Promise((resolve) => setTimeout(resolve, 450));
+  if (!result.ok) throw new Error(result.reason || "指定局面へ移動できませんでした。");
   return captureScene();
 }
 
 async function navigate(kind) {
-  if (kind === "previousShin" || kind === "nextShin") {
-    const direction = kind === "previousShin" ? "previous" : "next";
-    const limit = Math.max(1, Number(settings.shinSearchLimit || 60));
-    for (let step = 0; step < limit; step += 1) {
-      const scene = await navigateOnce(direction);
-      if (!scene.shinMistake.enabled) {
-        throw new Error(`シン悪手を判定できません: ${scene.shinMistake.reason}`);
-      }
-      if (scene.shinMistake.isShin) return scene;
-    }
-    throw new Error(`${limit}局面以内にシン悪手を見つけられませんでした。`);
+  const decisions = await loadDecisions();
+  const current = currentScene?.sourcePosition || (await captureScene()).sourcePosition;
+  const direction = kind.startsWith("previous") ? -1 : 1;
+  let targets;
+  if (kind === "previous" || kind === "next") {
+    targets = decisions.filter((item) => /^[0-9][mpsz]$/.test(item.actual || ""));
+  } else if (kind.endsWith("Mistake")) {
+    targets = decisions.filter((item) => item.isBad);
+  } else if (kind.endsWith("Shin")) {
+    targets = listShinMistakes(decisions, settings);
+  } else if (kind.endsWith("Major")) {
+    targets = listMajorMistakes(decisions);
+  } else {
+    throw new Error(`未対応の移動操作です: ${kind}`);
   }
-  return navigateOnce(kind);
+  if (!targets.length) throw new Error("該当する局面がありません。");
+  const currentPosition = {
+    handCounter: Number(current?.handCounter ?? -1),
+    plyCounter: Number(current?.plyCounter ?? -1)
+  };
+  const ordered = [...targets].sort(comparePosition);
+  const target = direction > 0
+    ? ordered.find((item) => comparePosition(item, currentPosition) > 0) || ordered[0]
+    : [...ordered].reverse().find((item) => comparePosition(item, currentPosition) < 0) || ordered.at(-1);
+  return goToDecision(target);
 }
 
 async function loadMajorMistakes() {
-  await ensureAdapter();
-  const mistakes = await bigCoachView.webContents.executeJavaScript(
-    "window.__bigcoachDesktop.listMistakes()", true
-  );
-  currentMajorMistakes = listMajorMistakes(mistakes, settings);
+  const decisions = await loadDecisions();
+  currentMajorMistakes = listMajorMistakes(decisions);
   return {
     items: currentMajorMistakes,
-    definition: `実打とAI推奨が異なり、Q値差が${settings.majorMistakeQGap}以上、実打確率が${Number(settings.majorMistakeMaxProbability) * 100}%以下`
+    definition: "1シャンテン以下・聴牌・他家リーチ時の、実打とAI推奨が異なる局面"
   };
 }
 
 async function goToMajorMistake(mismatchOrdinal) {
-  await ensureAdapter();
-  const result = await bigCoachView.webContents.executeJavaScript(
-    `window.__bigcoachDesktop.goToMismatch(${Number(mismatchOrdinal)})`, true
-  );
-  if (!result.ok) throw new Error(result.reason || "大悪手局面へ移動できませんでした。");
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  return captureScene();
+  const decisions = await loadDecisions();
+  const target = listMajorMistakes(decisions).find((item) =>
+    Number(item.mismatchOrdinal) === Number(mismatchOrdinal));
+  if (!target) throw new Error("指定した大悪手が見つかりませんでした。");
+  return goToDecision(target);
 }
 
 function comparisonStatus(scene, simulation) {
@@ -190,28 +258,49 @@ function candidateTable(title, analysis) {
   return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function cardHtml(scene, simulation, memo, imageName = null) {
+async function prepareCardImages() {
+  await ensureAdapter();
+  let frontState;
+  try {
+    frontState = await bigCoachView.webContents.executeJavaScript(
+      "window.__bigcoachDesktop.prepareCapture('front')", true
+    );
+    const frontImage = frontState.rect
+      ? await bigCoachView.webContents.capturePage(frontState.rect)
+      : await bigCoachView.webContents.capturePage();
+    await bigCoachView.webContents.executeJavaScript(
+      "window.__bigcoachDesktop.prepareCapture('back')", true
+    );
+    const backImage = await bigCoachView.webContents.capturePage();
+    currentCardImages = {
+      frontDataUrl: frontImage.toDataURL(),
+      backDataUrl: backImage.toDataURL()
+    };
+    return currentCardImages;
+  } finally {
+    if (frontState?.previous) {
+      await bigCoachView.webContents.executeJavaScript(
+        `window.__bigcoachDesktop.restoreCapture(${JSON.stringify(frontState.previous)})`, true
+      ).catch(() => {});
+    }
+  }
+}
+
+function cardHtml(scene, simulation, memo, images) {
   const comparison = comparisonStatus(scene, simulation);
   const front = `
     <div class="bigcoach-card">
       <div style="font-size:1px;color:#fff">BigCoach:${escapeHtml(scene.sceneId)}</div>
-      ${imageName ? `<img src="${escapeHtml(imageName)}" style="max-width:100%">` : `<img src="${scene.screenshotDataUrl}" style="max-width:100%">`}
-      <h2>何を切りますか？</h2>
-      <p>${escapeHtml(scene.roundText)} / ${scene.currentTurn}巡目 / ${escapeHtml(scene.actorText)}</p>
-      <p>手牌: ${escapeHtml(scene.handMpsz)}</p>
+      <img src="${escapeHtml(images.front)}" style="max-width:100%">
     </div>`;
-  const bigCoachCandidates = scene.candidates.length
-    ? `<table><thead><tr><th>打牌</th><th>BigCoach評価</th></tr></thead><tbody>${scene.candidates.map((item) =>
-        `<tr><td>${tileHtml(item.tile)}</td><td>${item.value == null ? escapeHtml(item.label) : item.value.toFixed(4)}</td></tr>`).join("")}</tbody></table>`
-    : "<p>BigCoach候補評価は取得できませんでした。</p>";
   const back = `
     <div class="bigcoach-card">
-      <h2>比較</h2>
+      <img src="${escapeHtml(images.back)}" style="max-width:100%">
+      <h2>何切る比較</h2>
       <p>実打: ${tileHtml(comparison.actual)} / BigCoach推奨: ${tileHtml(comparison.bigCoach)} / シミュレーター推奨: ${tileHtml(comparison.simulator)}</p>
       <p>BigCoachとシミュレーター: <strong>${comparison.bigCoachMatchesSimulator ? "一致" : "不一致"}</strong></p>
-      <p>シン悪手: ${scene.shinMistake.enabled ? (scene.shinMistake.isShin ? "該当" : "非該当") : "判定不可"} (${escapeHtml(scene.shinMistake.reason)})</p>
+      <p>シン悪手: ${scene.shinMistake.isShin ? "該当" : "非該当"} (${escapeHtml(scene.shinMistake.reason)})</p>
       <p>大悪手: ${scene.majorMistake?.isMajor ? "該当" : "非該当"} (${escapeHtml(scene.majorMistake?.reason || "判定不可")})</p>
-      <h3>BigCoach候補</h3>${bigCoachCandidates}
       ${candidateTable("何切る結果（見えている牌を残り枚数から除外）", simulation?.withWall)}
       ${candidateTable("何切る結果（残り枚数を補正しない）", simulation?.withoutWall)}
       <h3>メモ</h3><div>${escapeHtml(memo).replace(/\n/g, "<br>")}</div>
@@ -219,6 +308,20 @@ function cardHtml(scene, simulation, memo, imageName = null) {
       <p>局面ID: ${escapeHtml(scene.sceneId)}</p>
     </div>`;
   return { front, back, comparison };
+}
+
+async function refreshStats() {
+  const decisions = await loadDecisions();
+  const sourceUrl = bigCoachView.webContents.getURL();
+  const currentRecords = buildRoundRecords(decisions, sourceUrl);
+  const merged = mergeRoundRecords(readJson(statsPath(), { version: 1, rounds: {} }), currentRecords);
+  writeJson(statsPath(), merged);
+  return {
+    current: summarizeRecords(currentRecords, settings),
+    cumulative: summarizeRecords(Object.values(merged.rounds), settings),
+    uniqueRounds: Object.keys(merged.rounds).length,
+    currentRounds: currentRecords.length
+  };
 }
 
 async function diagnose() {
@@ -257,11 +360,25 @@ async function diagnose() {
 }
 
 function registerIpc() {
-  ipcMain.handle("app:get-state", async () => ({ settings, scene: currentScene, simulation: currentSimulation }));
+  ipcMain.handle("app:get-state", async () => ({
+    settings,
+    scene: currentScene,
+    simulation: currentSimulation,
+    history: readJson(historyPath(), [])
+  }));
   ipcMain.handle("bigcoach:scene", () => captureScene());
   ipcMain.handle("bigcoach:navigate", (_event, kind) => navigate(kind));
   ipcMain.handle("bigcoach:major-mistakes", () => loadMajorMistakes());
   ipcMain.handle("bigcoach:go-to-mistake", (_event, ordinal) => goToMajorMistake(ordinal));
+  ipcMain.handle("bigcoach:open-url", async (_event, value) => {
+    const url = validateReviewUrl(value);
+    currentScene = null;
+    currentSimulation = null;
+    currentCardImages = null;
+    await bigCoachView.webContents.loadURL(url);
+    return { url, history: saveReviewHistory(url) };
+  });
+  ipcMain.handle("bigcoach:history", () => readJson(historyPath(), []));
   ipcMain.handle("bigcoach:reload", async () => {
     await bigCoachView.webContents.loadURL(bigCoachUrl());
     return true;
@@ -273,17 +390,34 @@ function registerIpc() {
   });
   ipcMain.handle("settings:save", (_event, next) => saveSettings(next));
   ipcMain.handle("app:diagnose", () => diagnose());
+  ipcMain.handle("stats:refresh", () => refreshStats());
   ipcMain.handle("anki:preview", async (_event, memo) => {
     const scene = currentScene || await captureScene();
-    if (!currentSimulation) throw new Error("先に何切るシミュレーターを実行してください。");
+    if (!currentSimulation) currentSimulation = await simulator.analyze(scene, settings);
+    const images = currentCardImages || await prepareCardImages();
     const duplicates = await anki.findDuplicates(scene.sceneId).catch(() => []);
-    return { ...cardHtml(scene, currentSimulation, memo), duplicates };
+    return {
+      ...cardHtml(scene, currentSimulation, memo, {
+        front: images.frontDataUrl,
+        back: images.backDataUrl
+      }),
+      duplicates,
+      simulation: currentSimulation,
+      comparison: comparisonStatus(scene, currentSimulation)
+    };
   });
   ipcMain.handle("anki:register", async (_event, payload) => {
     const scene = currentScene || await captureScene();
-    if (!currentSimulation) throw new Error("先に何切るシミュレーターを実行してください。");
-    const imageName = await anki.storeImage(scene.screenshotDataUrl, scene.sceneId);
-    const html = cardHtml(scene, currentSimulation, payload.memo || "", imageName);
+    if (!currentSimulation) currentSimulation = await simulator.analyze(scene, settings);
+    const images = currentCardImages || await prepareCardImages();
+    const [frontName, backName] = await Promise.all([
+      anki.storeImage(images.frontDataUrl, scene.sceneId, "front"),
+      anki.storeImage(images.backDataUrl, scene.sceneId, "back")
+    ]);
+    const html = cardHtml(scene, currentSimulation, payload.memo || "", {
+      front: frontName,
+      back: backName
+    });
     return anki.add({
       settings,
       scene,
@@ -293,6 +427,9 @@ function registerIpc() {
     });
   });
   ipcMain.handle("app:open-logs", () => shell.openPath(logPath));
+  ipcMain.on("layout:overlay-open", (_event, open) => {
+    if (bigCoachView) bigCoachView.setVisible(!Boolean(open));
+  });
   ipcMain.on("layout:panel-width", (_event, width) => {
     settings.panelWidth = Number(width);
     layoutViews();
@@ -337,7 +474,9 @@ async function createWindow() {
   bigCoachView.webContents.on("did-finish-load", async () => {
     try {
       await ensureAdapter();
-      mainWindow.webContents.send("bigcoach:status", { ok: true, url: bigCoachView.webContents.getURL() });
+      const url = bigCoachView.webContents.getURL();
+      const history = saveReviewHistory(url);
+      mainWindow.webContents.send("bigcoach:status", { ok: true, url, history });
     } catch (error) {
       log(error.stack || error);
       mainWindow.webContents.send("bigcoach:status", { ok: false, message: error.message });

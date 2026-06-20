@@ -1,24 +1,73 @@
 "use strict";
 
-function classifyMajorMistake(mistake, settings = {}) {
-  const minQGap = Number(settings.majorMistakeQGap ?? 2);
-  const maxProbability = Number(settings.majorMistakeMaxProbability ?? 0.01);
-  const hasMetrics = Number.isFinite(mistake.qGap) && Number.isFinite(mistake.actualProbability);
-  const isMajor = hasMetrics &&
-    mistake.actual !== mistake.recommended &&
-    mistake.qGap >= minQGap &&
-    mistake.actualProbability <= maxProbability;
+function isCountable(decision) {
+  return !decision.atSelfRiichi || decision.ownRiichiMoment;
+}
+
+function shinEligible(decision) {
+  return isCountable(decision) &&
+    (Number(decision.shanten) <= 2 || Boolean(decision.opponentRiichi));
+}
+
+function majorEligible(decision) {
+  return isCountable(decision) &&
+    (Number(decision.shanten) <= 1 || Boolean(decision.opponentRiichi));
+}
+
+function classifyShinMistake(decision, settings = {}) {
+  const threshold = Number(settings.shinMistakeThreshold ?? 0.1);
+  const eligible = shinEligible(decision);
+  const hasProbability = Number.isFinite(decision.actualProbability);
+  const isShin = eligible && decision.isBad && hasProbability &&
+    decision.actualProbability <= threshold;
   return {
-    ...mistake,
-    isMajor,
-    reason: hasMetrics
-      ? `Q差 ${mistake.qGap.toFixed(3)} / 実打確率 ${(mistake.actualProbability * 100).toFixed(4)}%`
-      : "Q値または実打確率を取得できません"
+    ...decision,
+    eligible,
+    isShin,
+    reason: !eligible
+      ? "2シャンテン以下・聴牌・他家リーチのいずれにも該当しないか、自分のリーチ後です"
+      : !decision.isBad
+        ? "実打とAI推奨が一致"
+        : !hasProbability
+          ? "実打のAI推奨度を取得できません"
+          : `実打推奨度 ${(decision.actualProbability * 100).toFixed(3)}% / 基準 ${(threshold * 100).toFixed(1)}%以下`
   };
 }
 
-function listMajorMistakes(mistakes, settings = {}) {
-  return mistakes.map((item) => classifyMajorMistake(item, settings)).filter((item) => item.isMajor);
+function classifyMajorMistake(decision) {
+  const eligible = majorEligible(decision);
+  const isMajor = eligible && Boolean(decision.isBad);
+  return {
+    ...decision,
+    eligible,
+    isMajor,
+    reason: !eligible
+      ? "1シャンテン以下・聴牌・他家リーチのいずれにも該当しないか、自分のリーチ後です"
+      : decision.isBad ? "条件内で実打とAI推奨が不一致" : "実打とAI推奨が一致"
+  };
 }
 
-module.exports = { classifyMajorMistake, listMajorMistakes };
+function listShinMistakes(decisions, settings = {}) {
+  return decisions.map((item) => classifyShinMistake(item, settings)).filter((item) => item.isShin);
+}
+
+function listMajorMistakes(decisions) {
+  return decisions.map(classifyMajorMistake).filter((item) => item.isMajor);
+}
+
+function calculateShinStats(decisions, settings = {}) {
+  const classified = decisions.map((item) => classifyShinMistake(item, settings));
+  const denominator = classified.filter((item) => item.eligible).length;
+  const count = classified.filter((item) => item.isShin).length;
+  return { count, denominator, rate: denominator ? count / denominator : 0 };
+}
+
+module.exports = {
+  classifyShinMistake,
+  classifyMajorMistake,
+  listShinMistakes,
+  listMajorMistakes,
+  calculateShinStats,
+  shinEligible,
+  majorEligible
+};

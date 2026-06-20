@@ -96,6 +96,32 @@
     };
   }
 
+  function closeOverlays() {
+    const page = doc();
+    for (const dialog of [...page.querySelectorAll("dialog[open]"), ...document.querySelectorAll("dialog[open]")]) {
+      try { dialog.close(); } catch { dialog.removeAttribute("open"); }
+    }
+    for (const element of page.querySelectorAll(".modal[open],.draggable-window:not(.hidden)")) {
+      if (element.id === "draggable-analysis") element.classList.add("hidden");
+    }
+  }
+
+  function opponentRiichiAt(game, handCounter, plyCounter) {
+    const reached = new Set();
+    for (let index = 0; index <= plyCounter; index += 1) {
+      const event = game.ge[handCounter][index];
+      if ((event?.type === "reach" || event?.type === "reach_accepted") &&
+          Number(event.actor) !== Number(game.heroPidx)) reached.add(Number(event.actor));
+    }
+    return reached.size > 0;
+  }
+
+  function initialHandsForRound(game, handCounter) {
+    const starts = (game.fullData?.mjai_log || []).filter((event) => event.type === "start_kyoku");
+    return (starts[handCounter]?.tehais || []).map((hand) =>
+      hand.map(normalizeTile).filter(Boolean).sort().join(""));
+  }
+
   async function reviewedEntries() {
     const data = await loadAnalysisData();
     const entries = [];
@@ -211,10 +237,16 @@
       recommendedDiscard: actionLabel(entry?.expected),
       candidates: candidateRows(entry),
       aiSummary: entry?.is_equal ? "実打とAI推奨が一致" : "実打とAI推奨が不一致",
+      shanten: entry?.shanten ?? null,
+      atSelfRiichi: Boolean(entry?.at_self_riichi),
+      ownRiichiMoment: entry?.actual?.type === "reach",
+      opponentRiichi: current ? opponentRiichiAt(page.defaultView.MM.GS, current.handCounter, current.plyCounter) : false,
       sourcePosition: current ? {
         kyokuIndex: current.kyokuIndex,
         entryIndex: current.entryIndex,
-        mismatchOrdinal: current.mismatchOrdinal
+        mismatchOrdinal: current.mismatchOrdinal,
+        handCounter: current.handCounter,
+        plyCounter: current.plyCounter
       } : null,
       diagnostics: {
         frame: page !== document,
@@ -226,6 +258,7 @@
   }
 
   async function clickControl(id) {
+    closeOverlays();
     const control = doc().querySelector(id);
     if (!control) return { ok: false, reason: `BigCoach操作ボタン ${id} が見つかりませんでした` };
     control.click();
@@ -255,16 +288,23 @@
   }
 
   async function listMistakes() {
+    return (await listDecisions()).filter((item) => item.isBad);
+  }
+
+  async function listDecisions() {
     const game = doc().defaultView?.MM?.GS;
     if (!game?.ge) throw new Error("BigCoachプレイヤーの局面データを取得できませんでした");
-    const mistakes = [];
+    const decisions = [];
+    let mismatchOrdinal = 0;
     for (let handCounter = 0; handCounter < game.ge.length; handCounter += 1) {
       const kyoku = game.fullData.review.kyokus[handCounter];
+      const initialHands = initialHandsForRound(game, handCounter);
       for (let plyCounter = 0; plyCounter < game.ge[handCounter].length; plyCounter += 1) {
         const entry = game.ge[handCounter][plyCounter].mortalEval;
-        if (!entry || entry.is_equal) continue;
+        if (!entry || !["dahai", "reach"].includes(entry.actual?.type)) continue;
         const metrics = entryMetrics(entry);
-        mistakes.push({
+        const isBad = !entry.is_equal;
+        decisions.push({
           kyokuIndex: handCounter,
           entryIndex: kyoku.entries.findIndex((item) =>
             item.junme === entry.junme &&
@@ -272,28 +312,32 @@
             actionEquals(item.actual, entry.actual)),
           handCounter,
           plyCounter,
-          mismatchOrdinal: mistakes.length,
+          mismatchOrdinal: isBad ? mismatchOrdinal++ : null,
           roundText: roundLabel(Number(kyoku.kyoku), Number(kyoku.honba || 0)),
           turn: Number(entry.junme || 0),
           actual: actionLabel(entry.actual),
           recommended: actionLabel(entry.expected),
           actualProbability: metrics.actualProbability,
           qGap: metrics.qGap,
-          handTiles: (entry.state?.tehai || []).map(normalizeTile).filter(Boolean)
+          handTiles: (entry.state?.tehai || []).map(normalizeTile).filter(Boolean),
+          shanten: Number(entry.shanten),
+          atSelfRiichi: Boolean(entry.at_self_riichi),
+          ownRiichiMoment: entry.actual?.type === "reach",
+          opponentRiichi: opponentRiichiAt(game, handCounter, plyCounter),
+          isBad,
+          initialHands
         });
       }
     }
-    return mistakes;
+    return decisions;
   }
 
-  async function goToMismatch(ordinal) {
-    const mistakes = await listMistakes();
-    const target = mistakes[Number(ordinal)];
-    if (!target) return { ok: false, reason: `大悪手 #${Number(ordinal) + 1} が見つかりませんでした` };
+  async function goToPosition(handCounter, plyCounter) {
+    closeOverlays();
     const frame = document.querySelector("iframe[title='Analysis Result']");
     const targetUrl = new URL(frame.src);
-    targetUrl.searchParams.set("hand", String(target.handCounter));
-    targetUrl.searchParams.set("ply", String(target.plyCounter));
+    targetUrl.searchParams.set("hand", String(handCounter));
+    targetUrl.searchParams.set("ply", String(plyCounter));
     return new Promise((resolve) => {
       const timeout = setTimeout(() => resolve({ ok: false, reason: "移動先局面の読込がタイムアウトしました" }), 10000);
       frame.addEventListener("load", () => {
@@ -304,6 +348,66 @@
     });
   }
 
-  window.__bigcoachDesktop = { scrape, navigate, listMistakes, goToMismatch };
+  async function goToMismatch(ordinal) {
+    const mistakes = await listMistakes();
+    const target = mistakes[Number(ordinal)];
+    if (!target) return { ok: false, reason: `ミス #${Number(ordinal) + 1} が見つかりませんでした` };
+    return goToPosition(target.handCounter, target.plyCounter);
+  }
+
+  async function prepareCapture(mode) {
+    closeOverlays();
+    const hiddenOuter = [];
+    for (const element of document.querySelectorAll("body > div:not(#app)")) {
+      hiddenOuter.push({ element, display: element.style.display });
+      element.style.setProperty("display", "none", "important");
+    }
+    const page = doc();
+    const game = page.defaultView?.MM?.GS;
+    if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
+    const previous = { showMortal: Boolean(game.showMortal), showHands: Boolean(game.showHands) };
+    const desiredMortal = mode === "back";
+    const desiredHands = mode === "back";
+    if (Boolean(game.showMortal) !== desiredMortal) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    if (Boolean(game.showHands) !== desiredHands) page.querySelector("#toggle-hands")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    const frame = document.querySelector("iframe[title='Analysis Result']");
+    const frameRect = frame.getBoundingClientRect();
+    const gameRect = page.querySelector(".grid-main")?.getBoundingClientRect();
+    return {
+      previous,
+      hiddenOuterCount: hiddenOuter.length,
+      rect: mode === "front" && gameRect ? {
+        x: Math.max(0, Math.floor(frameRect.x + gameRect.x)),
+        y: Math.max(0, Math.floor(frameRect.y + gameRect.y)),
+        width: Math.ceil(gameRect.width),
+        height: Math.ceil(gameRect.height)
+      } : null
+    };
+  }
+
+  async function restoreCapture(previous) {
+    const page = doc();
+    const game = page.defaultView?.MM?.GS;
+    if (!game || !previous) return;
+    if (Boolean(game.showMortal) !== Boolean(previous.showMortal)) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    if (Boolean(game.showHands) !== Boolean(previous.showHands)) page.querySelector("#toggle-hands")?.click();
+    for (const element of document.querySelectorAll("body > div:not(#app)")) {
+      element.style.removeProperty("display");
+    }
+    closeOverlays();
+  }
+
+  window.__bigcoachDesktop = {
+    scrape,
+    navigate,
+    listMistakes,
+    listDecisions,
+    goToMismatch,
+    goToPosition,
+    prepareCapture,
+    restoreCapture,
+    closeOverlays
+  };
   return { ready: true };
 })();

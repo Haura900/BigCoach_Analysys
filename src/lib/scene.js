@@ -80,6 +80,10 @@ function normalizeScene(raw, url) {
     recommendedDiscard,
     candidates,
     aiSummary: raw.aiSummary || "",
+    shanten: raw.shanten == null ? null : Number(raw.shanten),
+    atSelfRiichi: Boolean(raw.atSelfRiichi),
+    ownRiichiMoment: Boolean(raw.ownRiichiMoment),
+    opponentRiichi: Boolean(raw.opponentRiichi),
     sourcePosition: raw.sourcePosition || null,
     missing: [],
     diagnostics: raw.diagnostics || {}

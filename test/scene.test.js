@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { normalizeScene, validateScene, shinMistake } = require("../src/lib/scene");
+const { normalizeScene, validateScene } = require("../src/lib/scene");
 
 const raw = {
   handTiles: ["1m", "2m", "3m", "4p", "5p", "6p", "7s", "8s", "9s", "1z", "1z", "2z", "2z", "3z"],
@@ -23,10 +23,4 @@ test("局面を正規化して安定IDを作る", () => {
   assert.equal(scene.currentTurn, 3);
   assert.equal(scene.missing.length, 0);
   assert.equal(scene.sceneId.length, 20);
-});
-
-test("シン悪手基準を変更できる", () => {
-  const scene = normalizeScene(raw, "https://review.bigcoach.work/");
-  assert.equal(shinMistake(scene, { shinMistakeThreshold: 0.15 }).isShin, true);
-  assert.equal(shinMistake(scene, { shinMistakeThreshold: 0.25 }).isShin, false);
 });

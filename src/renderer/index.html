@@ -19,6 +19,17 @@
       </div>
     </header>
 
+    <section>
+      <h2>解析済みURLを開く</h2>
+      <div class="url-row">
+        <input id="review-url" type="url" placeholder="https://review.bigcoach.work/review/...">
+        <button id="open-review-url" class="primary">開く</button>
+      </div>
+      <label>過去の解析結果
+        <select id="review-history"><option value="">履歴を選択</option></select>
+      </label>
+    </section>
+
     <section class="scene-summary">
       <div class="section-title">
         <h2>現在の局面</h2>
@@ -38,6 +49,8 @@
         <button data-nav="nextMistake">次のミス</button>
         <button data-nav="previousShin">前のシン悪手</button>
         <button data-nav="nextShin">次のシン悪手</button>
+        <button data-nav="previousMajor">前の大悪手</button>
+        <button data-nav="nextMajor">次の大悪手</button>
       </div>
       <div id="shin-status" class="definition">シン悪手: BigCoach推奨と実打の評価差が設定基準以上の局面。</div>
       <button id="major-mistakes-toggle" class="danger-action action">大悪手一覧を表示</button>
@@ -45,6 +58,18 @@
         <div id="major-mistakes-definition" class="definition"></div>
         <div id="major-mistakes-list"></div>
       </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>シン悪手率</h2>
+        <button id="refresh-stats" class="ghost small">再計算</button>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card"><span>現在の解析</span><strong id="current-shin-rate">—</strong><small id="current-shin-count">—</small></div>
+        <div class="stat-card"><span>通算</span><strong id="total-shin-rate">—</strong><small id="total-shin-count">—</small></div>
+      </div>
+      <div id="stats-note" class="definition">4人全員の配牌を主キーとして重複を除外します。</div>
     </section>
 
     <section>
@@ -81,11 +106,8 @@
         <select name="language"><option value="ja">日本語</option><option value="en">English</option></select>
       </label>
       <div class="form-grid">
-        <label>シン悪手評価差<input name="shinMistakeThreshold" type="number" min="0" step="0.001"></label>
-        <label>シン悪手探索上限<input name="shinSearchLimit" type="number" min="1" max="500"></label>
+        <label>シン悪手 AI推奨度上限<input name="shinMistakeThreshold" type="number" min="0" max="1" step="0.01"></label>
         <label>解析タイムアウト（秒）<input name="simulatorTimeoutSec" type="number" min="3" max="300"></label>
-        <label>大悪手 Q値差<input name="majorMistakeQGap" type="number" min="0" step="0.1"></label>
-        <label>大悪手 実打確率上限<input name="majorMistakeMaxProbability" type="number" min="0" max="1" step="0.001"></label>
       </div>
       <fieldset>
         <legend>何切るシミュレーター</legend>

@@ -2,6 +2,7 @@
 
 const state = { settings: null, scene: null, simulation: null, activeTab: "wall" };
 state.majorMistakes = [];
+state.history = [];
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -51,7 +52,7 @@ function renderScene(scene) {
     `実打 ${scene.actualDiscard || "取得なし"}`,
     `推奨 ${scene.recommendedDiscard || "取得なし"}`
   ];
-  if (scene.shinMistake?.enabled) chips.push(scene.shinMistake.isShin ? "シン悪手" : "非シン悪手");
+  if (scene.shinMistake?.eligible) chips.push(scene.shinMistake.isShin ? "シン悪手" : "非シン悪手");
   if (scene.majorMistake?.isMajor) chips.push("大悪手");
   $("#scene-chips").innerHTML = chips.map((text, index) =>
     `<span class="chip ${text === "大悪手" || text === "シン悪手" ? "shin" : ""}">${escapeHtml(text)}</span>`).join("");
@@ -60,9 +61,9 @@ function renderScene(scene) {
   missing.textContent = scene.missing.length
     ? `取得できなかった情報: ${scene.missing.join("、")}\nBigCoach側の表示状態またはUI変更を確認してください。`
     : "";
-  $("#shin-status").textContent = `シン悪手: ${scene.shinMistake?.enabled ?
-    `${scene.shinMistake.isShin ? "該当" : "非該当"} — ${scene.shinMistake.reason}` :
-    `判定不可 — ${scene.shinMistake?.reason || "評価なし"}`}。大悪手: ${
+  $("#shin-status").textContent = `シン悪手: ${
+    scene.shinMistake?.isShin ? "該当" : "非該当"
+  } — ${scene.shinMistake?.reason || "評価なし"}。大悪手: ${
       scene.majorMistake?.isMajor ? "該当" : "非該当"
     } — ${scene.majorMistake?.reason || "評価なし"}。`;
   renderResults();
@@ -138,6 +139,33 @@ function populateSettings() {
   }
 }
 
+function renderHistory(history) {
+  state.history = history || [];
+  const select = $("#review-history");
+  select.innerHTML = `<option value="">履歴を選択</option>${state.history.map((item) =>
+    `<option value="${escapeHtml(item.url)}">${escapeHtml(item.url.replace("https://review.bigcoach.work/review/", ""))}</option>`
+  ).join("")}`;
+}
+
+function renderStats(result) {
+  const formatRate = (value) => `${(Number(value || 0) * 100).toFixed(2)}%`;
+  $("#current-shin-rate").textContent = formatRate(result.current.rate);
+  $("#current-shin-count").textContent = `${result.current.count} / ${result.current.denominator}`;
+  $("#total-shin-rate").textContent = formatRate(result.cumulative.rate);
+  $("#total-shin-count").textContent = `${result.cumulative.count} / ${result.cumulative.denominator}`;
+  $("#stats-note").textContent = `今回 ${result.currentRounds}局 / 通算 ${result.uniqueRounds}局（4人全員の配牌で重複除外）`;
+}
+
+function openDialog(dialog) {
+  window.bigcoachApp.setOverlayOpen(true);
+  dialog.showModal();
+}
+
+function closeDialog(dialog) {
+  dialog.close();
+  window.bigcoachApp.setOverlayOpen(false);
+}
+
 async function initialLoad() {
   const initial = await window.bigcoachApp.getState();
   Object.assign(state, initial);
@@ -146,11 +174,27 @@ async function initialLoad() {
   if (state.scene) renderScene(state.scene);
   if (state.simulation) { renderResults(); renderComparison(); }
   populateSettings();
+  renderHistory(initial.history);
   action("起動診断中...", () => window.bigcoachApp.diagnose()).then(renderDiagnostics).catch(() => {});
 }
 
+$("#open-review-url").addEventListener("click", () => action("解析結果を開いています...", async () => {
+  const result = await window.bigcoachApp.openReviewUrl($("#review-url").value);
+  renderHistory(result.history);
+  renderScene(await window.bigcoachApp.refreshScene());
+  renderStats(await window.bigcoachApp.refreshStats());
+  toast("解析結果URLを開きました");
+}));
+
+$("#review-history").addEventListener("change", (event) => {
+  if (!event.target.value) return;
+  $("#review-url").value = event.target.value;
+  $("#open-review-url").click();
+});
+
 $("#refresh-scene").addEventListener("click", () => action("局面を取得中...", async () => {
   renderScene(await window.bigcoachApp.refreshScene());
+  renderStats(await window.bigcoachApp.refreshStats());
   toast("局面を取得しました");
 }));
 
@@ -213,7 +257,7 @@ $("#diagnose").addEventListener("click", () => action("診断中...", async () =
 
 $("#settings-open").addEventListener("click", () => {
   populateSettings();
-  $("#settings-dialog").showModal();
+  openDialog($("#settings-dialog"));
 });
 
 $("#settings-save").addEventListener("click", async (event) => {
@@ -225,38 +269,57 @@ $("#settings-save").addEventListener("click", async (event) => {
     data[name] = form.elements.namedItem(name).checked;
   }
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
-  for (const name of ["shinMistakeThreshold", "shinSearchLimit", "simulatorTimeoutSec", "majorMistakeQGap", "majorMistakeMaxProbability"]) data[name] = Number(data[name]);
+  for (const name of ["shinMistakeThreshold", "simulatorTimeoutSec"]) data[name] = Number(data[name]);
   state.settings = await action("設定を保存中...", () => window.bigcoachApp.saveSettings(data));
-  $("#settings-dialog").close();
+  closeDialog($("#settings-dialog"));
   toast("設定を保存しました。表示言語の変更はBigCoach再読込後に反映されます。");
 });
 
-$("#preview-card").addEventListener("click", () => action("カードを作成中...", async () => {
-  const preview = await window.bigcoachApp.previewCard($("#memo").value);
-  $("#front-preview").innerHTML = preview.front;
-  $("#back-preview").innerHTML = preview.back;
-  const warning = $("#duplicate-warning");
-  warning.classList.toggle("hidden", !preview.duplicates.length);
-  warning.textContent = preview.duplicates.length ? `同じ局面IDのカードが ${preview.duplicates.length} 件あります。登録方法を選択してください。` : "";
-  $("#preview-dialog").showModal();
-}));
+$("#preview-card").addEventListener("click", async () => {
+  window.bigcoachApp.setOverlayOpen(true);
+  try {
+    await action("何切る実行・カード画像作成中...", async () => {
+      const preview = await window.bigcoachApp.previewCard($("#memo").value);
+      state.simulation = preview.simulation;
+      renderComparison(preview.comparison);
+      renderResults();
+      $("#front-preview").innerHTML = preview.front;
+      $("#back-preview").innerHTML = preview.back;
+      const warning = $("#duplicate-warning");
+      warning.classList.toggle("hidden", !preview.duplicates.length);
+      warning.textContent = preview.duplicates.length ? `同じ局面IDのカードが ${preview.duplicates.length} 件あります。登録方法を選択してください。` : "";
+      $("#preview-dialog").showModal();
+    });
+  } catch {
+    window.bigcoachApp.setOverlayOpen(false);
+  }
+});
 
-$("#preview-close").addEventListener("click", () => $("#preview-dialog").close());
+$("#preview-close").addEventListener("click", () => closeDialog($("#preview-dialog")));
 $("#register-card").addEventListener("click", () => action("Ankiへ登録中...", async () => {
   const result = await window.bigcoachApp.registerCard({
     memo: $("#memo").value,
     duplicateMode: $("#duplicate-mode").value
   });
-  $("#preview-dialog").close();
+  closeDialog($("#preview-dialog"));
   if (result.skipped) toast("重複カードのため登録をスキップしました");
   else if (result.updated) toast(`既存カードを更新しました（ID: ${result.noteId}）`);
   else toast(`Ankiカードを登録しました（ID: ${result.noteId}）`);
 }));
 
 $("#open-logs").addEventListener("click", () => window.bigcoachApp.openLogs());
+$("#refresh-stats").addEventListener("click", () => action("シン悪手率を計算中...", async () => {
+  renderStats(await window.bigcoachApp.refreshStats());
+  toast("シン悪手率を更新しました");
+}));
+
+for (const dialog of $$("dialog")) {
+  dialog.addEventListener("close", () => window.bigcoachApp.setOverlayOpen(false));
+}
 window.bigcoachApp.onBigCoachStatus((status) => {
   $("#browser-status").textContent = status.ok ? "BigCoach表示: 接続済み" : `BigCoach表示: ${status.message || "エラー"}`;
   $("#browser-status").className = status.ok ? "muted diagnostic-ok" : "muted diagnostic-ng";
+  if (status.history) renderHistory(status.history);
 });
 
 window.addEventListener("resize", () => {
