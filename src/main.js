@@ -19,6 +19,7 @@ const {
 } = require("./lib/stats");
 
 const DEFAULT_SETTINGS = {
+  settingsVersion: 2,
   deckName: "BigCoach",
   modelName: "基本",
   tags: ["BigCoach", "何切る"],
@@ -29,7 +30,7 @@ const DEFAULT_SETTINGS = {
   enableTegawari: true,
   enableRiichi: false,
   simulatorTimeoutSec: 30,
-  shinMistakeThreshold: 0.1,
+  shinMistakeThreshold: 0.001,
   panelWidth: 500
 };
 
@@ -41,6 +42,9 @@ let currentSimulation;
 let currentMajorMistakes = [];
 let currentDecisions = [];
 let currentCardImages;
+let tileImageCache;
+let statsRefreshTimer;
+let loadedReviewUrl = "";
 let simulator;
 let anki;
 let adapterSource;
@@ -74,7 +78,12 @@ function writeJson(filePath, value) {
 
 function loadSettings() {
   try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(settingsPath(), "utf8")) };
+    const saved = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+    if (!saved.settingsVersion || saved.settingsVersion < 2) {
+      if (Number(saved.shinMistakeThreshold) === 0.1) saved.shinMistakeThreshold = 0.001;
+      saved.settingsVersion = 2;
+    }
+    return { ...DEFAULT_SETTINGS, ...saved };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -130,6 +139,21 @@ async function ensureAdapter() {
   if (!exists) await bigCoachView.webContents.executeJavaScript(adapterSource, true);
 }
 
+async function waitForAnalysisReady(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await ensureAdapter();
+      const ready = await bigCoachView.webContents.executeJavaScript(
+        `window.__bigcoachDesktop.listDecisions().then(() => true).catch(() => false)`, true
+      );
+      if (ready) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("BigCoachの解析結果が読み込まれるまで待機しましたが、タイムアウトしました。");
+}
+
 async function captureScene() {
   await ensureAdapter();
   const raw = await bigCoachView.webContents.executeJavaScript("window.__bigcoachDesktop.scrape()", true);
@@ -148,10 +172,9 @@ async function captureScene() {
     ownRiichiMoment: normalized.ownRiichiMoment,
     opponentRiichi: normalized.opponentRiichi
   };
-  const screenshot = await bigCoachView.webContents.capturePage();
   currentScene = {
     ...normalized,
-    screenshotDataUrl: screenshot.toDataURL(),
+    screenshotDataUrl: null,
     shinMistake: classifyShinMistake(decision, settings),
     majorMistake: classifyMajorMistake(decision)
   };
@@ -161,6 +184,7 @@ async function captureScene() {
 }
 
 async function loadDecisions() {
+  if (currentDecisions.length) return currentDecisions;
   await ensureAdapter();
   currentDecisions = await bigCoachView.webContents.executeJavaScript(
     "window.__bigcoachDesktop.listDecisions()", true
@@ -238,23 +262,76 @@ function comparisonStatus(scene, simulation) {
   };
 }
 
+async function ensureSimulation(scene) {
+  if (currentSimulation) return currentSimulation;
+  if (scene.judgmentType === "call") {
+    currentSimulation = {
+      withWall: { candidates: [], recommendation: null },
+      withoutWall: { candidates: [], recommendation: null },
+      skippedReason: "副露判断のため何切るシミュレーター対象外"
+    };
+    return currentSimulation;
+  }
+  currentSimulation = await simulator.analyze(scene, settings);
+  return currentSimulation;
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   })[character]);
 }
 
-function tileHtml(code) {
-  return code ? `<span class="tile-text">${escapeHtml(code)}</span>` : "<span>取得なし</span>";
+function tileFilename(code) {
+  if (!code) return null;
+  if (code === "0p") return "aka1-66-90-s.png";
+  if (code === "0s") return "aka2-66-90-s.png";
+  if (code === "0m") return "aka3-66-90-s.png";
+  const suit = { m: "man", p: "pin", s: "sou", z: "ji" }[code[1]];
+  return suit ? `${suit}${code[0]}-66-90-s.png` : null;
 }
 
-function candidateTable(title, analysis) {
+function tileImagesDirectory() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "pai-images")
+    : path.join(__dirname, "..", "resources", "pai-images");
+}
+
+function tileDataUrls() {
+  if (tileImageCache) return tileImageCache;
+  tileImageCache = {};
+  for (const suit of ["m", "p", "s", "z"]) {
+    const max = suit === "z" ? 7 : 9;
+    for (let number = 1; number <= max; number += 1) {
+      const code = `${number}${suit}`;
+      const filename = tileFilename(code);
+      tileImageCache[code] = `data:image/png;base64,${fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64")}`;
+    }
+  }
+  for (const code of ["0m", "0p", "0s"]) {
+    const filename = tileFilename(code);
+    tileImageCache[code] = `data:image/png;base64,${fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64")}`;
+  }
+  return tileImageCache;
+}
+
+function tileHtml(code, mediaMode = "preview") {
+  if (!code || !tileFilename(code)) return `<span>${escapeHtml(code || "取得なし")}</span>`;
+  const src = mediaMode === "anki"
+    ? `bigcoach_tile_${tileFilename(code)}`
+    : tileDataUrls()[code];
+  return `<img src="${src}" alt="${escapeHtml(code)}" title="${escapeHtml(code)}" style="height:38px;vertical-align:middle">`;
+}
+
+function candidateTable(title, analysis, mediaMode = "preview") {
   if (!analysis?.candidates?.length) return `<h3>${escapeHtml(title)}</h3><p>結果なし</p>`;
   const rows = analysis.candidates.map((candidate) => `
-    <tr><td>${tileHtml(candidate.tile)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
+    <tr><td>${tileHtml(candidate.tile, mediaMode)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
     <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
     <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
-    <td>${candidate.ukeireTotal}</td></tr>`).join("");
+    <td><div style="display:flex;flex-wrap:wrap;gap:2px">${candidate.ukeire.map((item) =>
+      `<span style="display:inline-flex;align-items:end">${tileHtml(item.tile, mediaMode)}<small>×${item.count}</small></span>`).join("")}</div>
+    <div>${candidate.ukeireTotal}枚</div></td></tr>`).join("");
   return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -286,23 +363,30 @@ async function prepareCardImages() {
   }
 }
 
-function cardHtml(scene, simulation, memo, images) {
+function judgmentPrompt(scene) {
+  if (scene.judgmentType === "call") return "副露？";
+  if (scene.judgmentType === "riichi") return "リーチ？";
+  return "何切？";
+}
+
+function cardHtml(scene, simulation, memo, images, mediaMode = "preview") {
   const comparison = comparisonStatus(scene, simulation);
   const front = `
     <div class="bigcoach-card">
       <div style="font-size:1px;color:#fff">BigCoach:${escapeHtml(scene.sceneId)}</div>
       <img src="${escapeHtml(images.front)}" style="max-width:100%">
+      <h2 style="text-align:center;font-size:28px">${judgmentPrompt(scene)}</h2>
     </div>`;
   const back = `
     <div class="bigcoach-card">
       <img src="${escapeHtml(images.back)}" style="max-width:100%">
       <h2>何切る比較</h2>
-      <p>実打: ${tileHtml(comparison.actual)} / BigCoach推奨: ${tileHtml(comparison.bigCoach)} / シミュレーター推奨: ${tileHtml(comparison.simulator)}</p>
+      <p>実打: ${tileHtml(comparison.actual, mediaMode)} / BigCoach推奨: ${tileHtml(comparison.bigCoach, mediaMode)} / シミュレーター推奨: ${tileHtml(comparison.simulator, mediaMode)}</p>
       <p>BigCoachとシミュレーター: <strong>${comparison.bigCoachMatchesSimulator ? "一致" : "不一致"}</strong></p>
       <p>シン悪手: ${scene.shinMistake.isShin ? "該当" : "非該当"} (${escapeHtml(scene.shinMistake.reason)})</p>
       <p>大悪手: ${scene.majorMistake?.isMajor ? "該当" : "非該当"} (${escapeHtml(scene.majorMistake?.reason || "判定不可")})</p>
-      ${candidateTable("何切る結果（見えている牌を残り枚数から除外）", simulation?.withWall)}
-      ${candidateTable("何切る結果（残り枚数を補正しない）", simulation?.withoutWall)}
+      ${candidateTable("何切る結果（見えている牌を残り枚数から除外）", simulation?.withWall, mediaMode)}
+      ${candidateTable("何切る結果（残り枚数を補正しない）", simulation?.withoutWall, mediaMode)}
       <h3>メモ</h3><div>${escapeHtml(memo).replace(/\n/g, "<br>")}</div>
       <hr><p><a href="${escapeHtml(scene.url)}">BigCoach解析結果</a></p>
       <p>局面ID: ${escapeHtml(scene.sceneId)}</p>
@@ -324,6 +408,23 @@ async function refreshStats() {
   };
 }
 
+function scheduleAutomaticStatsRefresh() {
+  clearTimeout(statsRefreshTimer);
+  statsRefreshTimer = setTimeout(async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        await waitForAnalysisReady(1000);
+        const result = await refreshStats();
+        mainWindow?.webContents.send("stats:updated", result);
+        return;
+      } catch (error) {
+        if (attempt === 19) log(`automatic stats refresh failed: ${error.stack || error}`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+  }, 300);
+}
+
 async function diagnose() {
   const result = {
     bigCoach: { ok: false, message: "未確認" },
@@ -337,9 +438,12 @@ async function diagnose() {
   } catch (error) { result.bigCoach.message = error.message; }
   try {
     const scene = await captureScene();
+    const handSummary = scene.handsBySeat.length === 4
+      ? scene.handsBySeat.map((hand, index) => `P${index}:${hand.length}枚`).join(" / ")
+      : "4人分を取得できません";
     result.scene = {
-      ok: scene.handTiles.length > 0,
-      message: scene.handTiles.length ? `手牌 ${scene.handMpsz} を取得` : `不足: ${scene.missing.join("、")}`,
+      ok: scene.handTiles.length > 0 && scene.handsBySeat.length === 4,
+      message: scene.handTiles.length ? `4人手牌 ${handSummary}` : `不足: ${scene.missing.join("、")}`,
       missing: scene.missing
     };
   } catch (error) { result.scene.message = error.message; }
@@ -364,7 +468,8 @@ function registerIpc() {
     settings,
     scene: currentScene,
     simulation: currentSimulation,
-    history: readJson(historyPath(), [])
+    history: readJson(historyPath(), []),
+    tileImages: tileDataUrls()
   }));
   ipcMain.handle("bigcoach:scene", () => captureScene());
   ipcMain.handle("bigcoach:navigate", (_event, kind) => navigate(kind));
@@ -375,8 +480,10 @@ function registerIpc() {
     currentScene = null;
     currentSimulation = null;
     currentCardImages = null;
+    currentDecisions = [];
     await bigCoachView.webContents.loadURL(url);
-    return { url, history: saveReviewHistory(url) };
+    const history = saveReviewHistory(url);
+    return { url, history };
   });
   ipcMain.handle("bigcoach:history", () => readJson(historyPath(), []));
   ipcMain.handle("bigcoach:reload", async () => {
@@ -385,7 +492,7 @@ function registerIpc() {
   });
   ipcMain.handle("simulator:run", async () => {
     const scene = currentScene || await captureScene();
-    currentSimulation = await simulator.analyze(scene, settings);
+    currentSimulation = await ensureSimulation(scene);
     return { simulation: currentSimulation, comparison: comparisonStatus(scene, currentSimulation) };
   });
   ipcMain.handle("settings:save", (_event, next) => saveSettings(next));
@@ -393,7 +500,7 @@ function registerIpc() {
   ipcMain.handle("stats:refresh", () => refreshStats());
   ipcMain.handle("anki:preview", async (_event, memo) => {
     const scene = currentScene || await captureScene();
-    if (!currentSimulation) currentSimulation = await simulator.analyze(scene, settings);
+    await ensureSimulation(scene);
     const images = currentCardImages || await prepareCardImages();
     const duplicates = await anki.findDuplicates(scene.sceneId).catch(() => []);
     return {
@@ -408,16 +515,29 @@ function registerIpc() {
   });
   ipcMain.handle("anki:register", async (_event, payload) => {
     const scene = currentScene || await captureScene();
-    if (!currentSimulation) currentSimulation = await simulator.analyze(scene, settings);
+    await ensureSimulation(scene);
     const images = currentCardImages || await prepareCardImages();
     const [frontName, backName] = await Promise.all([
       anki.storeImage(images.frontDataUrl, scene.sceneId, "front"),
       anki.storeImage(images.backDataUrl, scene.sceneId, "back")
     ]);
+    const tileCodes = new Set([
+      scene.actualDiscard,
+      scene.recommendedDiscard,
+      currentSimulation?.withWall?.recommendation,
+      ...[currentSimulation?.withWall, currentSimulation?.withoutWall].flatMap((analysis) =>
+        (analysis?.candidates || []).flatMap((candidate) =>
+          [candidate.tile, ...(candidate.ukeire || []).map((item) => item.tile)]))
+    ].filter((code) => tileFilename(code)));
+    await Promise.all([...tileCodes].map((code) => {
+      const filename = tileFilename(code);
+      const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
+      return anki.storeMedia(`bigcoach_tile_${filename}`, data);
+    }));
     const html = cardHtml(scene, currentSimulation, payload.memo || "", {
       front: frontName,
       back: backName
-    });
+    }, "anki");
     return anki.add({
       settings,
       scene,
@@ -475,11 +595,23 @@ async function createWindow() {
     try {
       await ensureAdapter();
       const url = bigCoachView.webContents.getURL();
+      if (url !== loadedReviewUrl) {
+        currentDecisions = [];
+        currentScene = null;
+        currentSimulation = null;
+        currentCardImages = null;
+        loadedReviewUrl = url;
+      }
       const history = saveReviewHistory(url);
       mainWindow.webContents.send("bigcoach:status", { ok: true, url, history });
     } catch (error) {
       log(error.stack || error);
       mainWindow.webContents.send("bigcoach:status", { ok: false, message: error.message });
+    }
+  });
+  bigCoachView.webContents.on("did-frame-finish-load", (_event, isMainFrame) => {
+    if (!isMainFrame && bigCoachView.webContents.getURL().includes("/review/")) {
+      scheduleAutomaticStatsRefresh();
     }
   });
   bigCoachView.webContents.on("did-fail-load", (_event, code, description) => {

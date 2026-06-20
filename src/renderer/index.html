@@ -106,7 +106,7 @@
         <select name="language"><option value="ja">日本語</option><option value="en">English</option></select>
       </label>
       <div class="form-grid">
-        <label>シン悪手 AI推奨度上限<input name="shinMistakeThreshold" type="number" min="0" max="1" step="0.01"></label>
+        <label>シン悪手 AI推奨度上限（0.001 = 0.1%）<input name="shinMistakeThreshold" type="number" min="0" max="1" step="0.0001"></label>
         <label>解析タイムアウト（秒）<input name="simulatorTimeoutSec" type="number" min="3" max="300"></label>
       </div>
       <fieldset>

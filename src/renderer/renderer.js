@@ -3,6 +3,7 @@
 const state = { settings: null, scene: null, simulation: null, activeTab: "wall" };
 state.majorMistakes = [];
 state.history = [];
+state.tileImages = {};
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -33,8 +34,24 @@ async function action(label, operation) {
   }
 }
 
+async function waitForSceneReady(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      return await window.bigcoachApp.refreshScene();
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError || new Error("BigCoachの解析結果を読み込めませんでした");
+}
+
 function tile(code) {
-  return code ? `<span class="tile">${escapeHtml(code)}</span>` : "—";
+  return code && state.tileImages[code]
+    ? `<img class="tile-image" src="${state.tileImages[code]}" alt="${escapeHtml(code)}" title="${escapeHtml(code)}">`
+    : (code ? `<span class="tile">${escapeHtml(code)}</span>` : "—");
 }
 
 function escapeHtml(value) {
@@ -93,7 +110,8 @@ function analysisTable(analysis) {
       <td>${tile(candidate.tile)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
       <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
       <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
-      <td title="${escapeHtml(candidate.ukeire.map((item) => `${item.tile}×${item.count}`).join(" "))}">${candidate.ukeireTotal}</td>
+      <td><div class="ukeire-tiles">${candidate.ukeire.map((item) =>
+        `<span>${tile(item.tile)}<small>×${item.count}</small></span>`).join("")}</div><small>${candidate.ukeireTotal}枚</small></td>
     </tr>`).join("")
   }</tbody></table>`;
 }
@@ -181,8 +199,8 @@ async function initialLoad() {
 $("#open-review-url").addEventListener("click", () => action("解析結果を開いています...", async () => {
   const result = await window.bigcoachApp.openReviewUrl($("#review-url").value);
   renderHistory(result.history);
-  renderScene(await window.bigcoachApp.refreshScene());
-  renderStats(await window.bigcoachApp.refreshStats());
+  if (result.stats) renderStats(result.stats);
+  renderScene(await waitForSceneReady());
   toast("解析結果URLを開きました");
 }));
 
@@ -321,6 +339,7 @@ window.bigcoachApp.onBigCoachStatus((status) => {
   $("#browser-status").className = status.ok ? "muted diagnostic-ok" : "muted diagnostic-ng";
   if (status.history) renderHistory(status.history);
 });
+window.bigcoachApp.onStatsUpdated((result) => renderStats(result));
 
 window.addEventListener("resize", () => {
   const width = $("#panel").getBoundingClientRect().width;

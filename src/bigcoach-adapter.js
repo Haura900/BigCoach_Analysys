@@ -8,7 +8,6 @@
     41: "1z", 42: "2z", 43: "3z", 44: "4z", 45: "5z", 46: "6z", 47: "7z",
     51: "0m", 52: "0p", 53: "0s"
   };
-  let analysisDataPromise = null;
 
   function doc() {
     return document.querySelector("iframe[title='Analysis Result']")?.contentDocument || document;
@@ -72,19 +71,6 @@
     return { kyoku: windBase + number - 1, honba: honbaMatch ? Number(honbaMatch[1]) : 0 };
   }
 
-  async function loadAnalysisData() {
-    if (!analysisDataPromise) {
-      const frame = document.querySelector("iframe[title='Analysis Result']");
-      const dataPath = new URL(frame?.src || location.href).searchParams.get("data");
-      if (!dataPath) throw new Error("解析結果JSONの場所を取得できませんでした");
-      analysisDataPromise = fetch(dataPath).then((response) => {
-        if (!response.ok) throw new Error(`解析結果JSONの取得に失敗しました: HTTP ${response.status}`);
-        return response.json();
-      });
-    }
-    return analysisDataPromise;
-  }
-
   function entryMetrics(entry) {
     const best = entry.details?.find((item) => actionEquals(item.action, entry.expected)) || entry.details?.[0];
     const actual = entry.details?.find((item) => actionEquals(item.action, entry.actual));
@@ -123,13 +109,19 @@
   }
 
   async function reviewedEntries() {
-    const data = await loadAnalysisData();
+    const game = doc().defaultView?.MM?.GS;
+    const data = game?.fullData;
+    if (!data || !game?.ge) throw new Error("BigCoachの解析データがまだ読み込まれていません");
     const entries = [];
     let mismatchOrdinal = 0;
     for (let kyokuIndex = 0; kyokuIndex < (data.review?.kyokus || []).length; kyokuIndex += 1) {
       const kyoku = data.review.kyokus[kyokuIndex];
       for (let entryIndex = 0; entryIndex < (kyoku.entries || []).length; entryIndex += 1) {
         const entry = kyoku.entries[entryIndex];
+        const gameEvent = game.ge[kyokuIndex]?.find((event) => event.mortalEval === entry ||
+          (event.mortalEval?.junme === entry.junme &&
+           event.mortalEval?.tiles_left === entry.tiles_left &&
+           actionEquals(event.mortalEval?.actual, entry.actual)));
         const metrics = entryMetrics(entry);
         entries.push({
           kyokuIndex,
@@ -137,6 +129,8 @@
           mismatchOrdinal: entry.is_equal ? null : mismatchOrdinal++,
           kyoku: Number(kyoku.kyoku),
           honba: Number(kyoku.honba || 0),
+          handCounter: kyokuIndex,
+          plyCounter: Math.max(0, game.ge[kyokuIndex]?.indexOf(gameEvent) ?? 0),
           entry,
           metrics
         });
@@ -203,6 +197,14 @@
     })).filter((item) => item.tile);
   }
 
+  function judgmentType(entry) {
+    const types = new Set([entry?.actual?.type, entry?.expected?.type,
+      ...(entry?.details || []).map((item) => item.action?.type)].filter(Boolean));
+    if (types.has("reach")) return "riichi";
+    if (["chi", "pon", "daiminkan", "ankan", "kakan"].some((type) => types.has(type))) return "call";
+    return "discard";
+  }
+
   async function scrape() {
     const page = doc();
     const entries = await reviewedEntries();
@@ -218,6 +220,9 @@
     });
     const scoreTexts = [0, 1, 2, 3].map((seat) => text(`.gi-p${seat}`)).filter(Boolean);
     const roundText = current ? roundLabel(current.kyoku, current.honba) : text(".info-round");
+    const game = page.defaultView?.MM?.GS;
+    const handsBySeat = (game?.gs?.hands || []).map((hand) =>
+      (hand || []).map(normalizeTile).filter(Boolean));
     return {
       title: page.title,
       handTiles,
@@ -237,6 +242,8 @@
       recommendedDiscard: actionLabel(entry?.expected),
       candidates: candidateRows(entry),
       aiSummary: entry?.is_equal ? "実打とAI推奨が一致" : "実打とAI推奨が不一致",
+      judgmentType: judgmentType(entry),
+      handsBySeat,
       shanten: entry?.shanten ?? null,
       atSelfRiichi: Boolean(entry?.at_self_riichi),
       ownRiichiMoment: entry?.actual?.type === "reach",
@@ -301,7 +308,9 @@
       const initialHands = initialHandsForRound(game, handCounter);
       for (let plyCounter = 0; plyCounter < game.ge[handCounter].length; plyCounter += 1) {
         const entry = game.ge[handCounter][plyCounter].mortalEval;
-        if (!entry || !["dahai", "reach"].includes(entry.actual?.type)) continue;
+        if (!entry) continue;
+        const type = judgmentType(entry);
+        if (!["discard", "riichi", "call"].includes(type)) continue;
         const metrics = entryMetrics(entry);
         const isBad = !entry.is_equal;
         decisions.push({
@@ -320,6 +329,7 @@
           actualProbability: metrics.actualProbability,
           qGap: metrics.qGap,
           handTiles: (entry.state?.tehai || []).map(normalizeTile).filter(Boolean),
+          judgmentType: type,
           shanten: Number(entry.shanten),
           atSelfRiichi: Boolean(entry.at_self_riichi),
           ownRiichiMoment: entry.actual?.type === "reach",
@@ -334,18 +344,25 @@
 
   async function goToPosition(handCounter, plyCounter) {
     closeOverlays();
-    const frame = document.querySelector("iframe[title='Analysis Result']");
-    const targetUrl = new URL(frame.src);
-    targetUrl.searchParams.set("hand", String(handCounter));
-    targetUrl.searchParams.set("ply", String(plyCounter));
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve({ ok: false, reason: "移動先局面の読込がタイムアウトしました" }), 10000);
-      frame.addEventListener("load", () => {
-        clearTimeout(timeout);
-        setTimeout(() => resolve({ ok: true }), 100);
-      }, { once: true });
-      frame.src = targetUrl.href;
-    });
+    const page = doc();
+    const game = page.defaultView?.MM?.GS;
+    const hand = Number(handCounter);
+    const ply = Number(plyCounter);
+    if (!game?.ge?.[hand]?.[ply]) {
+      return { ok: false, reason: "指定された局面がBigCoachの解析結果にありません" };
+    }
+    game.hand_counter = hand;
+    game.ply_counter = ply;
+
+    // BigCoach自身の表示更新処理を「手牌表示の往復」で呼び出す。
+    // iframeを再読込しないため、局面移動ごとの解析JSON再取得は発生しない。
+    const toggleHands = page.querySelector("#toggle-hands");
+    if (!toggleHands) return { ok: false, reason: "BigCoachの表示更新ボタンを取得できませんでした" };
+    toggleHands.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    toggleHands.click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    return { ok: true };
   }
 
   async function goToMismatch(ordinal) {
@@ -366,7 +383,7 @@
     const game = page.defaultView?.MM?.GS;
     if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
     const previous = { showMortal: Boolean(game.showMortal), showHands: Boolean(game.showHands) };
-    const desiredMortal = mode === "back";
+    const desiredMortal = false;
     const desiredHands = mode === "back";
     if (Boolean(game.showMortal) !== desiredMortal) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     if (Boolean(game.showHands) !== desiredHands) page.querySelector("#toggle-hands")?.click();

@@ -21,7 +21,12 @@ test("シン悪手は条件局面かつAI推奨度以下で判定する", () => 
   assert.equal(classifyShinMistake(base, { shinMistakeThreshold: 0.1 }).isShin, true);
   assert.equal(classifyShinMistake({ ...base, actualProbability: 0.2 }, { shinMistakeThreshold: 0.1 }).isShin, false);
   assert.equal(classifyShinMistake({ ...base, shanten: 3 }).isShin, false);
-  assert.equal(classifyShinMistake({ ...base, shanten: 3, opponentRiichi: true }).isShin, true);
+  assert.equal(classifyShinMistake(
+    { ...base, shanten: 3, opponentRiichi: true },
+    { shinMistakeThreshold: 0.1 }
+  ).isShin, true);
+  assert.equal(classifyShinMistake({ ...base, actualProbability: 0.0005 }).isShin, true);
+  assert.equal(classifyShinMistake({ ...base, actualProbability: 0.005 }).isShin, false);
 });
 
 test("大悪手は1シャンテン以下・聴牌・他家リーチ時の悪手", () => {

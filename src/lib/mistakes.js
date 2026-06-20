@@ -5,17 +5,19 @@ function isCountable(decision) {
 }
 
 function shinEligible(decision) {
+  const hasShanten = decision.shanten != null && Number.isFinite(Number(decision.shanten));
   return isCountable(decision) &&
-    (Number(decision.shanten) <= 2 || Boolean(decision.opponentRiichi));
+    ((hasShanten && Number(decision.shanten) <= 2) || Boolean(decision.opponentRiichi));
 }
 
 function majorEligible(decision) {
+  const hasShanten = decision.shanten != null && Number.isFinite(Number(decision.shanten));
   return isCountable(decision) &&
-    (Number(decision.shanten) <= 1 || Boolean(decision.opponentRiichi));
+    ((hasShanten && Number(decision.shanten) <= 1) || Boolean(decision.opponentRiichi));
 }
 
 function classifyShinMistake(decision, settings = {}) {
-  const threshold = Number(settings.shinMistakeThreshold ?? 0.1);
+  const threshold = Number(settings.shinMistakeThreshold ?? 0.001);
   const eligible = shinEligible(decision);
   const hasProbability = Number.isFinite(decision.actualProbability);
   const isShin = eligible && decision.isBad && hasProbability &&

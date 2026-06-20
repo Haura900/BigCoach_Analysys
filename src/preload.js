@@ -22,5 +22,10 @@ contextBridge.exposeInMainWorld("bigcoachApp", {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on("bigcoach:status", listener);
     return () => ipcRenderer.removeListener("bigcoach:status", listener);
+  },
+  onStatsUpdated: (callback) => {
+    const listener = (_event, result) => callback(result);
+    ipcRenderer.on("stats:updated", listener);
+    return () => ipcRenderer.removeListener("stats:updated", listener);
   }
 });

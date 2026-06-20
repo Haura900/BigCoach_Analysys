@@ -75,6 +75,9 @@ th, td { text-align: right; padding: 6px 4px; border-bottom: 1px solid var(--bor
 th:first-child, td:first-child { text-align: left; }
 tr.recommended { background: rgba(70,185,139,.12); }
 .tile { display: inline-flex; align-items: center; justify-content: center; min-width: 29px; height: 38px; border-radius: 4px; background: #f4f0df; color: #131313; border-bottom: 3px solid #c9c2aa; font: bold 14px Consolas, monospace; }
+.tile-image { height: 38px; width: auto; vertical-align: middle; }
+.ukeire-tiles { display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-end; min-width: 130px; }
+.ukeire-tiles > span { display: inline-flex; align-items: end; }
 label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0; }
 input, select, textarea { width: 100%; margin-top: 4px; border: 1px solid var(--border); border-radius: 7px; padding: 8px; background: #0d1219; color: var(--text); }
 textarea { resize: vertical; }

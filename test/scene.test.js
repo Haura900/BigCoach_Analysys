@@ -15,6 +15,9 @@ const raw = {
   actualDiscard: "9m",
   recommendedDiscard: "3z",
   candidates: [{ tile: "3z", value: 0.5 }, { tile: "9m", value: 0.3 }]
+  ,handsBySeat: [
+    ["1m"], ["2m"], ["3m"], ["4m"]
+  ]
 };
 
 test("局面を正規化して安定IDを作る", () => {

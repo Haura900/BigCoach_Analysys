@@ -56,6 +56,11 @@ class AnkiService {
     return filename;
   }
 
+  async storeMedia(filename, dataBase64) {
+    await this.invoke("storeMediaFile", { filename, data: dataBase64 }, 15000);
+    return filename;
+  }
+
   async fieldsFor(settings, frontHtml, backHtml) {
     const names = await this.invoke("modelFieldNames", { modelName: settings.modelName });
     if (!Array.isArray(names) || names.length < 2) {

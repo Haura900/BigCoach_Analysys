@@ -1,6 +1,6 @@
 {
   "name": "bigcoach-anki-studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "BigCoach解析結果から何切るシミュレーションとAnkiカード登録を行うWindowsアプリ",
   "author": "BigCoach Anki Studio",
   "main": "src/main.js",
@@ -28,6 +28,13 @@
       {
         "from": "resources/simulator",
         "to": "simulator",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/pai-images",
+        "to": "pai-images",
         "filter": [
           "**/*"
         ]

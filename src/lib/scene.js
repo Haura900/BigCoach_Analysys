@@ -44,12 +44,14 @@ function normalizeScene(raw, url) {
   const actualDiscard = raw.actualDiscard || null;
   const recommendedDiscard = raw.recommendedDiscard || candidates[0]?.tile || null;
   const currentTurn = parseTurn(raw.tilesLeftText, raw.turn);
+  const handsBySeat = Array.isArray(raw.handsBySeat) ? raw.handsBySeat : [];
   const identitySeed = JSON.stringify({
     url,
     roundText,
     seatText,
     currentTurn,
     handTiles,
+    handsBySeat,
     selfCallTiles,
     actualDiscard
   });
@@ -80,6 +82,8 @@ function normalizeScene(raw, url) {
     recommendedDiscard,
     candidates,
     aiSummary: raw.aiSummary || "",
+    judgmentType: raw.judgmentType || "discard",
+    handsBySeat,
     shanten: raw.shanten == null ? null : Number(raw.shanten),
     atSelfRiichi: Boolean(raw.atSelfRiichi),
     ownRiichiMoment: Boolean(raw.ownRiichiMoment),
@@ -105,6 +109,7 @@ function normalizeCandidates(candidates) {
 function validateScene(scene) {
   const missing = [];
   if (!scene.handTiles.length) missing.push("手牌");
+  if (scene.handsBySeat.length !== 4 || scene.handsBySeat.some((hand) => !hand.length)) missing.push("4人分の手牌");
   if (!scene.doraTiles.length) missing.push("ドラ表示牌");
   if (!scene.roundText) missing.push("何局・本場");
   if (!scene.seatText) missing.push("自風・手番");
@@ -117,7 +122,7 @@ function validateScene(scene) {
 }
 
 function shinMistake(scene, settings) {
-  const threshold = Number(settings.shinMistakeThreshold ?? 0.08);
+  const threshold = Number(settings.shinMistakeThreshold ?? 0.001);
   const actual = scene.candidates.find((candidate) => candidate.tile === scene.actualDiscard);
   const best = scene.candidates.find((candidate) => candidate.tile === scene.recommendedDiscard) || scene.candidates[0];
   if (!scene.actualDiscard || !best || scene.actualDiscard === best.tile) {
