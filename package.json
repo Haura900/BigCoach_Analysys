@@ -1,0 +1,49 @@
+{
+  "name": "bigcoach-anki-studio",
+  "version": "0.1.0",
+  "description": "BigCoach解析結果から何切るシミュレーションとAnkiカード登録を行うWindowsアプリ",
+  "author": "BigCoach Anki Studio",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^42.4.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "work.bigcoach.anki-studio",
+    "productName": "BigCoach Anki Studio",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "package.json",
+      "README.md"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/simulator",
+        "to": "simulator",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

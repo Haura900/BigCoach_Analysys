@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "mahjong-cpp request schema",
+  "type": "object",
+  "properties": {
+    "enable_reddora": { "type": "boolean" },
+    "enable_uradora": { "type": "boolean" },
+    "enable_shanten_down": { "type": "boolean" },
+    "enable_tegawari": { "type": "boolean" },
+    "enable_riichi": { "type": "boolean" },
+    "round_wind": { "type": "integer" },
+    "dora_indicators": {
+      "type": "array",
+      "items": { "type": "integer" }
+    },
+    "hand": {
+      "type": "array",
+      "items": { "type": "integer" }
+    },
+    "hand_tiles": {
+      "type": "array",
+      "items": { "type": "integer" }
+    },
+    "melds": {
+      "type": "array"
+    },
+    "seat_wind": { "type": "integer" },
+    "version": { "type": "string" },
+    "current_turn": { "type": "integer" }
+  },
+  "additionalProperties": true
+}

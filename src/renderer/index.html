@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BigCoach Anki Studio</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="panel">
+    <header>
+      <div>
+        <h1>BigCoach Anki Studio</h1>
+        <p id="browser-status" class="muted">BigCoachを読込中...</p>
+      </div>
+      <div class="header-actions">
+        <button id="diagnose" class="ghost">診断</button>
+        <button id="settings-open" class="ghost">設定</button>
+      </div>
+    </header>
+
+    <section class="scene-summary">
+      <div class="section-title">
+        <h2>現在の局面</h2>
+        <button id="refresh-scene" class="ghost small">局面を取得</button>
+      </div>
+      <div id="scene-title" class="scene-title">解析済み局面を表示して「局面を取得」を押してください</div>
+      <div id="scene-chips" class="chips"></div>
+      <div id="missing-info" class="notice hidden"></div>
+    </section>
+
+    <section>
+      <h2>局面移動</h2>
+      <div class="navigation-grid">
+        <button data-nav="previous">前の局面</button>
+        <button data-nav="next">次の局面</button>
+        <button data-nav="previousMistake">前のミス</button>
+        <button data-nav="nextMistake">次のミス</button>
+        <button data-nav="previousShin">前のシン悪手</button>
+        <button data-nav="nextShin">次のシン悪手</button>
+      </div>
+      <div id="shin-status" class="definition">シン悪手: BigCoach推奨と実打の評価差が設定基準以上の局面。</div>
+    </section>
+
+    <section>
+      <button id="run-simulation" class="primary action">何切るシミュレーターを実行</button>
+      <div id="comparison" class="comparison"></div>
+      <div class="tabs">
+        <button class="tab active" data-tab="wall">河・副露を反映</button>
+        <button class="tab" data-tab="plain">補正なし</button>
+        <button class="tab" data-tab="bigcoach">BigCoach評価</button>
+      </div>
+      <div id="results" class="results empty">シミュレーター未実行</div>
+    </section>
+
+    <section>
+      <h2>Ankiカード</h2>
+      <label for="memo">解説用メモ</label>
+      <textarea id="memo" rows="4" placeholder="後で思い出したい判断理由など"></textarea>
+      <button id="preview-card" class="primary action">カード内容をプレビュー</button>
+    </section>
+
+    <section>
+      <div class="section-title"><h2>診断・警告</h2><button id="open-logs" class="ghost small">詳細ログ</button></div>
+      <div id="diagnostics" class="diagnostics muted">起動診断を実行しています...</div>
+    </section>
+  </main>
+
+  <dialog id="settings-dialog">
+    <form method="dialog" id="settings-form">
+      <h2>設定</h2>
+      <label>Ankiデッキ名<input name="deckName" required></label>
+      <label>Ankiノートタイプ<input name="modelName" required></label>
+      <label>タグ（カンマ区切り）<input name="tags"></label>
+      <label>BigCoach表示言語
+        <select name="language"><option value="ja">日本語</option><option value="en">English</option></select>
+      </label>
+      <div class="form-grid">
+        <label>シン悪手評価差<input name="shinMistakeThreshold" type="number" min="0" step="0.001"></label>
+        <label>シン悪手探索上限<input name="shinSearchLimit" type="number" min="1" max="500"></label>
+        <label>解析タイムアウト（秒）<input name="simulatorTimeoutSec" type="number" min="3" max="300"></label>
+      </div>
+      <fieldset>
+        <legend>何切るシミュレーター</legend>
+        <label><input name="enableRedDora" type="checkbox"> 赤ドラ</label>
+        <label><input name="enableUraDora" type="checkbox"> 裏ドラ</label>
+        <label><input name="enableShantenDown" type="checkbox"> シャンテン戻し</label>
+        <label><input name="enableTegawari" type="checkbox"> 手変わり</label>
+        <label><input name="enableRiichi" type="checkbox"> リーチ</label>
+      </fieldset>
+      <menu>
+        <button value="cancel" class="ghost">キャンセル</button>
+        <button value="default" id="settings-save" class="primary">保存</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="preview-dialog" class="wide">
+    <div class="preview-header"><h2>カードプレビュー</h2><button id="preview-close" class="ghost">閉じる</button></div>
+    <div id="duplicate-warning" class="notice hidden"></div>
+    <div class="preview-columns">
+      <article><h3>問題面</h3><div id="front-preview" class="card-preview"></div></article>
+      <article><h3>解答面</h3><div id="back-preview" class="card-preview"></div></article>
+    </div>
+    <div class="register-row">
+      <label>重複時
+        <select id="duplicate-mode">
+          <option value="skip">スキップ</option>
+          <option value="overwrite">既存カードを上書き</option>
+          <option value="separate">別カードとして登録</option>
+        </select>
+      </label>
+      <button id="register-card" class="primary">Ankiに登録</button>
+    </div>
+  </dialog>
+
+  <div id="busy" class="busy hidden"><div class="spinner"></div><span id="busy-text">処理中...</span></div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="renderer.js"></script>
+</body>
+</html>
