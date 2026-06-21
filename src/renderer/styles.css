@@ -60,6 +60,23 @@ button.danger-action { width: 100%; margin-top: 9px; border-color: #8e4148; back
 .stat-card { background: #111821; border: 1px solid var(--border); border-radius: 8px; padding: 9px; text-align: center; }
 .stat-card span, .stat-card small { display: block; color: var(--muted); font-size: 11px; }
 .stat-card strong { display: block; margin: 4px 0; font-size: 22px; color: var(--accent); }
+.trend-header { display: flex; justify-content: flex-end; gap: 12px; margin-top: 9px; color: var(--muted); font-size: 10px; }
+.trend-header span { display: inline-flex; align-items: center; gap: 4px; }
+.trend-key { width: 15px; height: 3px; border-radius: 2px; display: inline-block; }
+.trend-key.current { background: var(--warning); }
+.trend-key.cumulative { background: var(--accent); }
+.trend-chart { margin-top: 5px; min-height: 120px; border: 1px solid var(--border); border-radius: 8px; background: #111821; overflow: hidden; }
+.trend-chart svg { display: block; width: 100%; height: auto; }
+.trend-grid { stroke: #2a3544; stroke-width: 1; }
+.trend-axis-label { fill: var(--muted); font-size: 10px; }
+.trend-line { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.trend-line.current { stroke: var(--warning); }
+.trend-line.cumulative { stroke: var(--accent); }
+.trend-point { stroke: #111821; stroke-width: 1.5; }
+.trend-point.current { fill: var(--warning); }
+.trend-point.cumulative { fill: var(--accent); }
+.trend-empty { padding: 35px 10px; color: var(--muted); font-size: 11px; text-align: center; }
+.trend-latest { padding: 0 9px 8px; color: var(--muted); font-size: 10px; text-align: right; }
 .comparison { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 9px; }
 .comparison-item { background: #111821; border: 1px solid var(--border); border-radius: 7px; padding: 7px; text-align: center; }
 .comparison-item strong { display: block; font: 18px Consolas, monospace; margin-top: 3px; }

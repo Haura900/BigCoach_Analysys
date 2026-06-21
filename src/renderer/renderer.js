@@ -172,6 +172,53 @@ function renderStats(result) {
   $("#total-shin-rate").textContent = formatRate(result.cumulative.rate);
   $("#total-shin-count").textContent = `${result.cumulative.count} / ${result.cumulative.denominator}`;
   $("#stats-note").textContent = `今回 ${result.currentRounds}局 / 通算 ${result.uniqueRounds}局（4人全員の配牌で重複除外）`;
+  renderTrendChart(result.trend || []);
+}
+
+function renderTrendChart(trend) {
+  const root = $("#shin-trend-chart");
+  if (!trend.length) {
+    root.innerHTML = `<div class="trend-empty">推移データがありません。</div>`;
+    return;
+  }
+  const points = trend.slice(-30);
+  const width = 440;
+  const height = 190;
+  const margin = { left: 38, right: 12, top: 12, bottom: 34 };
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+  const values = points.flatMap((item) => [item.current.rate, item.cumulative.rate]);
+  const maxRate = Math.max(0.05, ...values);
+  const ceiling = Math.min(1, Math.ceil(maxRate * 10) / 10);
+  const x = (index) => margin.left + (points.length === 1 ? innerWidth / 2 : index * innerWidth / (points.length - 1));
+  const y = (rate) => margin.top + innerHeight * (1 - Number(rate || 0) / ceiling);
+  const path = (selector) => points.map((item, index) =>
+    `${index ? "L" : "M"}${x(index).toFixed(1)},${y(selector(item)).toFixed(1)}`).join(" ");
+  const percent = (value) => `${(Number(value || 0) * 100).toFixed(2)}%`;
+  const dateLabel = (value) => {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "不明" : `${date.getMonth() + 1}/${date.getDate()}`;
+  };
+  const yTicks = [0, ceiling / 2, ceiling];
+  const labelIndexes = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])];
+  root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="シン悪手率の推移">
+    ${yTicks.map((rate) => `
+      <line class="trend-grid" x1="${margin.left}" y1="${y(rate)}" x2="${width - margin.right}" y2="${y(rate)}"></line>
+      <text class="trend-axis-label" x="${margin.left - 5}" y="${y(rate) + 4}" text-anchor="end">${(rate * 100).toFixed(0)}%</text>
+    `).join("")}
+    <path class="trend-line cumulative" d="${path((item) => item.cumulative.rate)}"></path>
+    <path class="trend-line current" d="${path((item) => item.current.rate)}"></path>
+    ${points.map((item, index) => `
+      <circle class="trend-point cumulative" cx="${x(index)}" cy="${y(item.cumulative.rate)}" r="3">
+        <title>${dateLabel(item.recordedAt)} 通算 ${percent(item.cumulative.rate)} (${item.cumulative.count}/${item.cumulative.denominator})</title>
+      </circle>
+      <circle class="trend-point current" cx="${x(index)}" cy="${y(item.current.rate)}" r="3.5">
+        <title>${dateLabel(item.recordedAt)} 各解析 ${percent(item.current.rate)} (${item.current.count}/${item.current.denominator}) ${item.rounds}局</title>
+      </circle>
+    `).join("")}
+    ${labelIndexes.map((index) => `<text class="trend-axis-label" x="${x(index)}" y="${height - 8}" text-anchor="middle">${dateLabel(points[index].recordedAt)}</text>`).join("")}
+  </svg>
+  <div class="trend-latest">最新: 各解析 ${percent(points.at(-1).current.rate)} ／ 通算 ${percent(points.at(-1).cumulative.rate)}　全${trend.length}解析</div>`;
 }
 
 function openDialog(dialog) {

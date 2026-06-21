@@ -55,6 +55,23 @@ async function main() {
   mark("opened");
   console.error("step: opened");
   await new Promise((resolve) => setTimeout(resolve, 2500));
+  if (process.env.INSPECT_MODERN_UI === "1") {
+    const inspection = await bigCoach.evaluate(`({
+      url:location.href,
+      text:document.body.innerText.slice(0,1200),
+      inputs:[...document.querySelectorAll("input")].map((item)=>({
+        type:item.type,value:item.value,checked:item.checked,outer:item.outerHTML.slice(0,300)
+      })),
+      labels:[...document.querySelectorAll("label,.el-radio-button,.el-radio-button__inner")].map((item)=>({
+        text:item.textContent.trim(),className:String(item.className)
+      })),
+      iframes:[...document.querySelectorAll("iframe")].map((item)=>({title:item.title,src:item.src}))
+    })`);
+    console.log(JSON.stringify(inspection, null, 2));
+    bigCoach.close();
+    panel.close();
+    return;
+  }
   const automaticStatsText = await panel.evaluate("document.querySelector('#current-shin-rate').textContent");
   const first = await panel.evaluate("window.bigcoachApp.refreshScene()");
   mark("scene");
@@ -78,6 +95,19 @@ async function main() {
     return;
   }
   const stats = await panel.evaluate("window.bigcoachApp.refreshStats()");
+  const trendChart = await panel.evaluate(`(()=>{
+    const root=document.querySelector("#shin-trend-chart");
+    return {
+      svg:Boolean(root?.querySelector("svg")),
+      currentLine:Boolean(root?.querySelector(".trend-line.current")),
+      cumulativeLine:Boolean(root?.querySelector(".trend-line.cumulative")),
+      points:root?.querySelectorAll(".trend-point").length || 0,
+      latest:root?.querySelector(".trend-latest")?.textContent || ""
+    };
+  })()`);
+  if (!trendChart.svg || !trendChart.currentLine || !trendChart.cumulativeLine) {
+    throw new Error("Shin mistake trend chart was not rendered");
+  }
   const major = await panel.evaluate("window.bigcoachApp.listMajorMistakes()");
   mark("major");
   console.error("step: major");
@@ -127,6 +157,7 @@ async function main() {
     },
     majorMistakes: major.items.length,
     stats,
+    trendChart,
     jumped: {
       roundText: jumped.roundText,
       turn: jumped.currentTurn,

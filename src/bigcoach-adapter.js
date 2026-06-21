@@ -9,8 +9,40 @@
     51: "0m", 52: "0p", 53: "0s"
   };
 
+  function analysisFrame() {
+    return document.querySelector(
+      "iframe[title='Analysis Result'], iframe[title='Classic Analysis Result']"
+    );
+  }
+
+  async function ensureClassicFrame(timeoutMs = 12000) {
+    if (window.MM?.GS) return null;
+    let frame = analysisFrame();
+    if (frame?.contentDocument?.defaultView?.MM?.GS) return frame;
+
+    const classicInput = document.querySelector(
+      "input[value='classic'], input[type='radio'][value='classic']"
+    );
+    if (classicInput) {
+      classicInput.click();
+    } else {
+      const classicControl = [...document.querySelectorAll(
+        "label,button,.el-radio-button,.el-radio-button__inner"
+      )].find((element) => /クラシック|Classic|经典|經典/.test(element.textContent || ""));
+      classicControl?.click();
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      frame = analysisFrame();
+      if (frame?.contentDocument?.defaultView?.MM?.GS) return frame;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("BigCoachのクラシック解析画面へ切り替えられませんでした");
+  }
+
   function doc() {
-    return document.querySelector("iframe[title='Analysis Result']")?.contentDocument || document;
+    return analysisFrame()?.contentDocument || document;
   }
 
   function normalizeTile(raw) {
@@ -109,6 +141,7 @@
   }
 
   async function reviewedEntries() {
+    await ensureClassicFrame();
     const game = doc().defaultView?.MM?.GS;
     const data = game?.fullData;
     if (!data || !game?.ge) throw new Error("BigCoachの解析データがまだ読み込まれていません");
@@ -206,6 +239,7 @@
   }
 
   async function scrape() {
+    await ensureClassicFrame();
     const page = doc();
     const entries = await reviewedEntries();
     const current = currentEntry(entries);
@@ -299,6 +333,7 @@
   }
 
   async function listDecisions() {
+    await ensureClassicFrame();
     const game = doc().defaultView?.MM?.GS;
     if (!game?.ge) throw new Error("BigCoachプレイヤーの局面データを取得できませんでした");
     const decisions = [];
@@ -344,6 +379,7 @@
 
   async function goToPosition(handCounter, plyCounter) {
     closeOverlays();
+    await ensureClassicFrame();
     const page = doc();
     const game = page.defaultView?.MM?.GS;
     const hand = Number(handCounter);
@@ -374,10 +410,13 @@
 
   async function prepareCapture(mode) {
     closeOverlays();
+    await ensureClassicFrame();
     const hiddenOuter = [];
-    for (const element of document.querySelectorAll("body > div:not(#app)")) {
-      hiddenOuter.push({ element, display: element.style.display });
-      element.style.setProperty("display", "none", "important");
+    if (window.top === window) {
+      for (const element of document.querySelectorAll("body > div:not(#app)")) {
+        hiddenOuter.push({ element, display: element.style.display });
+        element.style.setProperty("display", "none", "important");
+      }
     }
     const page = doc();
     const game = page.defaultView?.MM?.GS;
@@ -388,8 +427,8 @@
     if (Boolean(game.showMortal) !== desiredMortal) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     if (Boolean(game.showHands) !== desiredHands) page.querySelector("#toggle-hands")?.click();
     await new Promise((resolve) => setTimeout(resolve, 180));
-    const frame = document.querySelector("iframe[title='Analysis Result']");
-    const frameRect = frame.getBoundingClientRect();
+    const frame = analysisFrame();
+    const frameRect = frame?.getBoundingClientRect() || { x: 0, y: 0 };
     const gameRect = page.querySelector(".grid-main")?.getBoundingClientRect();
     const bodyText = String(page.body?.innerText || "");
     const probability = (label) => {
@@ -399,6 +438,7 @@
     return {
       previous,
       hiddenOuterCount: hiddenOuter.length,
+      relativeToFrame: !frame,
       outcomes: mode === "back" ? {
         draw: probability("流局確率"),
         movement: probability("横移動確率"),
@@ -420,8 +460,10 @@
     if (!game || !previous) return;
     if (Boolean(game.showMortal) !== Boolean(previous.showMortal)) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     if (Boolean(game.showHands) !== Boolean(previous.showHands)) page.querySelector("#toggle-hands")?.click();
-    for (const element of document.querySelectorAll("body > div:not(#app)")) {
-      element.style.removeProperty("display");
+    if (window.top === window) {
+      for (const element of document.querySelectorAll("body > div:not(#app)")) {
+        element.style.removeProperty("display");
+      }
     }
     closeOverlays();
   }

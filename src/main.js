@@ -1,11 +1,12 @@
 "use strict";
 
-const { app, BrowserWindow, WebContentsView, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, safeStorage } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const { normalizeScene, validateScene } = require("./lib/scene");
 const { SimulatorService } = require("./lib/simulator");
 const { AnkiService } = require("./lib/anki");
+const { AuthSessionStore } = require("./lib/auth-session");
 const {
   classifyShinMistake,
   classifyMajorMistake,
@@ -15,7 +16,8 @@ const {
 const {
   buildRoundRecords,
   mergeRoundRecords,
-  summarizeRecords
+  summarizeRecords,
+  buildTrend
 } = require("./lib/stats");
 
 const DEFAULT_SETTINGS = {
@@ -49,6 +51,8 @@ let simulator;
 let anki;
 let adapterSource;
 let logPath;
+let authSessionStore;
+let quitAfterSessionFlush = false;
 
 function log(message) {
   const line = `${new Date().toISOString()} ${String(message)}\n`;
@@ -133,10 +137,36 @@ function layoutViews() {
   bigCoachView.setBounds({ x: 0, y: 0, width: Math.max(320, width - panelWidth), height });
 }
 
+function findAnalysisFrame(frame = bigCoachView?.webContents.mainFrame) {
+  if (!frame) return null;
+  if (/\/ui_advanced(?:\/|[?#]|$)/.test(frame.url || "")) return frame;
+  for (const child of frame.frames || []) {
+    const found = findAnalysisFrame(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function waitForAnalysisFrame(timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frame = findAnalysisFrame();
+    if (frame) return frame;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("BigCoachの解析表示フレームを取得できませんでした。");
+}
+
+async function executeAdapter(expression) {
+  const frame = await waitForAnalysisFrame();
+  return frame.executeJavaScript(expression, true);
+}
+
 async function ensureAdapter() {
   if (!bigCoachView || bigCoachView.webContents.isDestroyed()) throw new Error("BigCoach表示が初期化されていません。");
-  const exists = await bigCoachView.webContents.executeJavaScript("Boolean(window.__bigcoachDesktop)", true);
-  if (!exists) await bigCoachView.webContents.executeJavaScript(adapterSource, true);
+  const frame = await waitForAnalysisFrame();
+  const exists = await frame.executeJavaScript("Boolean(window.__bigcoachDesktop)", true);
+  if (!exists) await frame.executeJavaScript(adapterSource, true);
 }
 
 async function waitForAnalysisReady(timeoutMs = 15000) {
@@ -144,7 +174,7 @@ async function waitForAnalysisReady(timeoutMs = 15000) {
   while (Date.now() < deadline) {
     try {
       await ensureAdapter();
-      const ready = await bigCoachView.webContents.executeJavaScript(
+      const ready = await executeAdapter(
         `window.__bigcoachDesktop.listDecisions().then(() => true).catch(() => false)`, true
       );
       if (ready) return;
@@ -156,7 +186,7 @@ async function waitForAnalysisReady(timeoutMs = 15000) {
 
 async function captureScene() {
   await ensureAdapter();
-  const raw = await bigCoachView.webContents.executeJavaScript("window.__bigcoachDesktop.scrape()", true);
+  const raw = await executeAdapter("window.__bigcoachDesktop.scrape()");
   const normalized = validateScene(normalizeScene(raw, bigCoachView.webContents.getURL()));
   const actualCandidate = normalized.candidates.find((item) => item.tile === normalized.actualDiscard);
   const recommendedCandidate = normalized.candidates.find((item) => item.tile === normalized.recommendedDiscard) ||
@@ -186,9 +216,7 @@ async function captureScene() {
 async function loadDecisions() {
   if (currentDecisions.length) return currentDecisions;
   await ensureAdapter();
-  currentDecisions = await bigCoachView.webContents.executeJavaScript(
-    "window.__bigcoachDesktop.listDecisions()", true
-  );
+  currentDecisions = await executeAdapter("window.__bigcoachDesktop.listDecisions()");
   return currentDecisions;
 }
 
@@ -198,8 +226,8 @@ function comparePosition(left, right) {
 
 async function goToDecision(decision) {
   await ensureAdapter();
-  const result = await bigCoachView.webContents.executeJavaScript(
-    `window.__bigcoachDesktop.goToPosition(${Number(decision.handCounter)},${Number(decision.plyCounter)})`, true
+  const result = await executeAdapter(
+    `window.__bigcoachDesktop.goToPosition(${Number(decision.handCounter)},${Number(decision.plyCounter)})`
   );
   if (!result.ok) throw new Error(result.reason || "指定局面へ移動できませんでした。");
   return captureScene();
@@ -340,15 +368,25 @@ async function prepareCardImages() {
   let frontState;
   let backState;
   try {
-    frontState = await bigCoachView.webContents.executeJavaScript(
-      "window.__bigcoachDesktop.prepareCapture('front')", true
-    );
-    const frontImage = frontState.rect
-      ? await bigCoachView.webContents.capturePage(frontState.rect)
+    frontState = await executeAdapter("window.__bigcoachDesktop.prepareCapture('front')");
+    let frontRect = frontState.rect;
+    if (frontRect && frontState.relativeToFrame) {
+      const frameRect = await bigCoachView.webContents.executeJavaScript(`(()=>{
+        const frame=document.querySelector("iframe[title='Analysis Result'],iframe[title='Classic Analysis Result']");
+        if(!frame)return null;
+        const rect=frame.getBoundingClientRect();
+        return {x:rect.x,y:rect.y};
+      })()`, true);
+      if (frameRect) frontRect = {
+        ...frontRect,
+        x: Math.floor(frontRect.x + frameRect.x),
+        y: Math.floor(frontRect.y + frameRect.y)
+      };
+    }
+    const frontImage = frontRect
+      ? await bigCoachView.webContents.capturePage(frontRect)
       : await bigCoachView.webContents.capturePage();
-    backState = await bigCoachView.webContents.executeJavaScript(
-      "window.__bigcoachDesktop.prepareCapture('back')", true
-    );
+    backState = await executeAdapter("window.__bigcoachDesktop.prepareCapture('back')");
     const backImage = await bigCoachView.webContents.capturePage();
     currentCardImages = {
       frontDataUrl: frontImage.toDataURL(),
@@ -358,8 +396,8 @@ async function prepareCardImages() {
     return currentCardImages;
   } finally {
     if (frontState?.previous) {
-      await bigCoachView.webContents.executeJavaScript(
-        `window.__bigcoachDesktop.restoreCapture(${JSON.stringify(frontState.previous)})`, true
+      await executeAdapter(
+        `window.__bigcoachDesktop.restoreCapture(${JSON.stringify(frontState.previous)})`
       ).catch(() => {});
     }
   }
@@ -419,13 +457,14 @@ async function refreshStats() {
   const decisions = await loadDecisions();
   const sourceUrl = bigCoachView.webContents.getURL();
   const currentRecords = buildRoundRecords(decisions, sourceUrl);
-  const merged = mergeRoundRecords(readJson(statsPath(), { version: 1, rounds: {} }), currentRecords);
+  const merged = mergeRoundRecords(readJson(statsPath(), { version: 2, rounds: {}, analyses: {} }), currentRecords);
   writeJson(statsPath(), merged);
   return {
     current: summarizeRecords(currentRecords, settings),
     cumulative: summarizeRecords(Object.values(merged.rounds), settings),
     uniqueRounds: Object.keys(merged.rounds).length,
-    currentRounds: currentRecords.length
+    currentRounds: currentRecords.length,
+    trend: buildTrend(merged, settings)
   };
 }
 
@@ -595,6 +634,16 @@ async function createWindow() {
   });
   await mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 
+  const bigCoachSession = session.fromPartition("persist:bigcoach");
+  authSessionStore = new AuthSessionStore({
+    electronSession: bigCoachSession,
+    safeStorage,
+    filePath: path.join(app.getPath("userData"), "bigcoach-auth-session.bin"),
+    log
+  });
+  await authSessionStore.restore();
+  authSessionStore.start();
+
   bigCoachView = new WebContentsView({
     webPreferences: {
       partition: "persist:bigcoach",
@@ -616,8 +665,8 @@ async function createWindow() {
   });
   bigCoachView.webContents.on("did-finish-load", async () => {
     try {
-      await ensureAdapter();
       const url = bigCoachView.webContents.getURL();
+      if (url.includes("/review/")) await ensureAdapter();
       if (url !== loadedReviewUrl) {
         currentDecisions = [];
         currentScene = null;
@@ -660,4 +709,13 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   simulator?.stop();
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", (event) => {
+  if (quitAfterSessionFlush || !authSessionStore) return;
+  event.preventDefault();
+  quitAfterSessionFlush = true;
+  authSessionStore.flush()
+    .catch((error) => log(error.stack || error))
+    .finally(() => app.quit());
 });
