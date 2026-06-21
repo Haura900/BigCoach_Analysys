@@ -4,11 +4,19 @@ class AnkiService {
   constructor({ log }) {
     this.url = "http://127.0.0.1:8765";
     this.log = log;
+    this.requestQueue = Promise.resolve();
   }
 
   async invoke(action, params = {}, timeoutMs = 5000) {
+    const operation = this.requestQueue.then(() => this.invokeNow(action, params, timeoutMs));
+    this.requestQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  async invokeNow(action, params = {}, timeoutMs = 5000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
     try {
       const response = await fetch(this.url, {
         method: "POST",
@@ -16,12 +24,18 @@ class AnkiService {
         body: JSON.stringify({ action, version: 6, params }),
         signal: controller.signal
       });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
       if (payload.error) throw new Error(payload.error);
+      this.log?.(`AnkiConnect ${action} completed in ${Date.now() - startedAt}ms`);
       return payload.result;
     } catch (error) {
-      if (error.name === "AbortError" || error.cause?.code === "ECONNREFUSED") {
+      this.log?.(`AnkiConnect ${action} failed after ${Date.now() - startedAt}ms: ${error.stack || error}`);
+      if (error.cause?.code === "ECONNREFUSED") {
         throw new Error("Ankiに接続できません。Ankiを起動し、AnkiConnectアドオン（コード: 2055492159）が有効か確認してください。");
+      }
+      if (error.name === "AbortError") {
+        throw new Error(`AnkiConnectの「${action}」処理が${Math.ceil(timeoutMs / 1000)}秒以内に完了しませんでした。Ankiの同期処理が終わるまで待ってから再試行してください。`);
       }
       throw error;
     } finally {
@@ -52,12 +66,12 @@ class AnkiService {
   async storeImage(dataUrl, sceneId, suffix = "") {
     const data = String(dataUrl).replace(/^data:image\/png;base64,/, "");
     const filename = `bigcoach_${sceneId}${suffix ? `_${suffix}` : ""}.png`;
-    await this.invoke("storeMediaFile", { filename, data }, 15000);
+    await this.invoke("storeMediaFile", { filename, data }, 60000);
     return filename;
   }
 
   async storeMedia(filename, dataBase64) {
-    await this.invoke("storeMediaFile", { filename, data: dataBase64 }, 15000);
+    await this.invoke("storeMediaFile", { filename, data: dataBase64 }, 30000);
     return filename;
   }
 

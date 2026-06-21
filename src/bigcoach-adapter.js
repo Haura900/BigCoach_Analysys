@@ -408,6 +408,103 @@
     return goToPosition(target.handCounter, target.plyCounter);
   }
 
+  function captureVisualState() {
+    const page = doc();
+    const discardSvg = page.querySelector(".discard-bars-svg");
+    const discardBarRectCount = discardSvg?.querySelectorAll("rect").length || 0;
+    const callBarRectCount = page.querySelectorAll(".killer-call-bars rect").length;
+    const barRectCount = discardBarRectCount + callBarRectCount;
+    const spoilerVisible = [...(discardSvg?.querySelectorAll("text") || [])]
+      .some((element) => /何切模式|何切モード|spoiler/i.test(element.textContent || ""));
+    const candidateTable = page.querySelector(".opt-info > table:first-of-type");
+    const candidateDetailRows = Math.max(0, (candidateTable?.querySelectorAll("tr").length || 0) - 1);
+    const opponentHands = [1, 2, 3].map((seat) => {
+      const images = [...page.querySelectorAll(`.hand-closed-p${seat} img`)]
+        .filter((image) => {
+          const style = page.defaultView.getComputedStyle(image);
+          const rect = image.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" &&
+            Number(style.opacity || 1) > 0 && rect.width > 0 && rect.height > 0;
+        });
+      const backs = images.filter((image) => /\/(?:back|Blank)\.(?:svg|png)/i.test(image.currentSrc || image.src)).length;
+      return {
+        seat,
+        total: images.length,
+        backs,
+        faces: images.length - backs
+      };
+    });
+    const totalOpponentTiles = opponentHands.reduce((sum, hand) => sum + hand.total, 0);
+    const opponentFaceTiles = opponentHands.reduce((sum, hand) => sum + hand.faces, 0);
+    const opponentBackTiles = opponentHands.reduce((sum, hand) => sum + hand.backs, 0);
+    const everyOpponentHasFaces = opponentHands
+      .filter((hand) => hand.total > 0)
+      .every((hand) => hand.faces > 0);
+    return {
+      barRectCount,
+      discardBarRectCount,
+      callBarRectCount,
+      candidateDetailRows,
+      spoilerVisible,
+      aiBarsVisible: barRectCount > 0 && !spoilerVisible,
+      aiAdviceVisible: candidateDetailRows > 0,
+      opponentHands,
+      totalOpponentTiles,
+      opponentFaceTiles,
+      opponentBackTiles,
+      opponentsRevealed: totalOpponentTiles > 0 && everyOpponentHasFaces &&
+        opponentFaceTiles > opponentBackTiles,
+      opponentsHidden: totalOpponentTiles > 0 && opponentFaceTiles === 0 && opponentBackTiles > 0
+    };
+  }
+
+  function visualStateMatches(mode, state) {
+    return mode === "front"
+      ? !state.aiBarsVisible && !state.aiAdviceVisible && state.opponentsHidden
+      : state.aiBarsVisible && state.aiAdviceVisible && state.opponentsRevealed;
+  }
+
+  async function waitForVisualPaint(frameCount = 4) {
+    const view = doc().defaultView;
+    for (let index = 0; index < frameCount; index += 1) {
+      await new Promise((resolve) => view.requestAnimationFrame(() => resolve()));
+    }
+    await new Promise((resolve) => view.setTimeout(resolve, 150));
+    return captureVisualState();
+  }
+
+  function renderCaptureMode(mode) {
+    const page = doc();
+    const game = page.defaultView?.MM?.GS;
+    if (!game?.ui) {
+      return { ok: false, reason: "BigCoachの描画機能を取得できませんでした" };
+    }
+    page.defaultView.setTimeout(() => {
+      game.showMortal = mode === "back";
+      game.showHands = mode === "back";
+      game.ui.updateHandInfo();
+      game.ui.clearDiscardBars();
+      game.ui.updateDiscardBars();
+      game.ui.clearCallBars();
+      game.ui.updateCallBars();
+      game.ui.updateOptInfo();
+      const event = game.ge?.[game.hand_counter]?.[game.ply_counter];
+      game.ui.updateLogo(event?.mortalEval);
+    }, 0);
+    return { ok: true };
+  }
+
+  async function ensureCaptureVisualState(mode) {
+    const state = captureVisualState();
+    if (visualStateMatches(mode, state)) return state;
+    throw new Error(
+      `${mode === "front" ? "問題面" : "解答面"}の表示状態を確認できませんでした。` +
+      ` AI棒グラフ=${state.aiBarsVisible ? "表示" : "非表示"}、` +
+      `AI候補表=${state.aiAdviceVisible ? "表示" : "非表示"}、` +
+      `相手手牌=${state.opponentsRevealed ? "表向き" : state.opponentsHidden ? "裏向き" : "判定不能"}`
+    );
+  }
+
   async function prepareCapture(mode) {
     closeOverlays();
     await ensureClassicFrame();
@@ -422,11 +519,7 @@
     const game = page.defaultView?.MM?.GS;
     if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
     const previous = { showMortal: Boolean(game.showMortal), showHands: Boolean(game.showHands) };
-    const desiredMortal = mode === "back";
-    const desiredHands = mode === "back";
-    if (Boolean(game.showMortal) !== desiredMortal) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    if (Boolean(game.showHands) !== desiredHands) page.querySelector("#toggle-hands")?.click();
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    const verifiedState = await ensureCaptureVisualState(mode);
     const frame = analysisFrame();
     const frameRect = frame?.getBoundingClientRect() || { x: 0, y: 0 };
     const gameRect = page.querySelector(".grid-main")?.getBoundingClientRect();
@@ -439,6 +532,13 @@
       previous,
       hiddenOuterCount: hiddenOuter.length,
       relativeToFrame: !frame,
+      displayState: {
+        showMortal: Boolean(game.showMortal),
+        showHands: Boolean(game.showHands),
+        hasAiAnalysis: /AI Analysis/.test(bodyText),
+        hasNanikiruNotice: /何切模式|何切モード/.test(bodyText),
+        ...verifiedState
+      },
       outcomes: mode === "back" ? {
         draw: probability("流局確率"),
         movement: probability("横移動確率"),
@@ -458,8 +558,14 @@
     const page = doc();
     const game = page.defaultView?.MM?.GS;
     if (!game || !previous) return;
-    if (Boolean(game.showMortal) !== Boolean(previous.showMortal)) page.querySelector(".discard-bars-svg")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    if (Boolean(game.showHands) !== Boolean(previous.showHands)) page.querySelector("#toggle-hands")?.click();
+    game.showMortal = Boolean(previous.showMortal);
+    game.showHands = Boolean(previous.showHands);
+    game.ui.updateHandInfo();
+    game.ui.clearDiscardBars();
+    game.ui.updateDiscardBars();
+    game.ui.clearCallBars();
+    game.ui.updateCallBars();
+    game.ui.updateOptInfo();
     if (window.top === window) {
       for (const element of document.querySelectorAll("body > div:not(#app)")) {
         element.style.removeProperty("display");
@@ -475,6 +581,9 @@
     listDecisions,
     goToMismatch,
     goToPosition,
+    captureVisualState,
+    waitForVisualPaint,
+    renderCaptureMode,
     prepareCapture,
     restoreCapture,
     closeOverlays

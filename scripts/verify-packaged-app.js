@@ -115,11 +115,47 @@ async function main() {
   const jumped = await panel.evaluate("window.bigcoachApp.navigate('nextMajor')");
   mark("jumped");
   console.error("step: jumped");
+  await panel.evaluate(`(()=>{
+    document.querySelector("#memo").value = "verification";
+    document.querySelector("#preview-card").click();
+    return true;
+  })()`);
+  const previewDeadline = Date.now() + 20000;
+  let previewDialogOpen = false;
+  while (Date.now() < previewDeadline) {
+    const uiState = await panel.evaluate(`(()=>({
+      dialogOpen:document.querySelector("#preview-dialog").open,
+      busyVisible:!document.querySelector("#busy").classList.contains("hidden"),
+      toastVisible:!document.querySelector("#toast").classList.contains("hidden"),
+      toastText:document.querySelector("#toast").textContent
+    }))()`);
+    if (uiState.dialogOpen) {
+      previewDialogOpen = true;
+      break;
+    }
+    if (!uiState.busyVisible && uiState.toastVisible) {
+      throw new Error(`Card preview UI failed: ${uiState.toastText}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  if (!previewDialogOpen) throw new Error("Card preview UI did not open after capture");
+  await panel.evaluate("document.querySelector('#preview-close').click()");
+  await new Promise((resolve) => setTimeout(resolve, 100));
   const preview = await panel.evaluate("window.bigcoachApp.previewCard('verification')");
   mark("preview");
   console.error("step: preview");
   const tileImagesInBack = (preview.back.match(/<img src="data:image\/png;base64/g) || []).length;
   if (tileImagesInBack < 3) throw new Error("Card back does not contain tile images");
+  if (preview.captureDiagnostics?.front?.aiBarsVisible !== false ||
+      preview.captureDiagnostics?.front?.aiAdviceVisible !== false ||
+      preview.captureDiagnostics?.front?.opponentsHidden !== true) {
+    throw new Error("Card front is not in question mode with opponent hands hidden");
+  }
+  if (preview.captureDiagnostics?.back?.aiBarsVisible !== true ||
+      preview.captureDiagnostics?.back?.aiAdviceVisible !== true ||
+      preview.captureDiagnostics?.back?.opponentsRevealed !== true) {
+    throw new Error("Card back is not in answer mode with AI bars and opponent hands shown");
+  }
   const frontPromptIndex = preview.front.search(/何切？|副露？|リーチ？/);
   const frontImageIndex = preview.front.indexOf("<img");
   if (frontPromptIndex < 0 || frontPromptIndex > frontImageIndex) throw new Error("Front prompt is not above the image");
@@ -138,6 +174,14 @@ async function main() {
   const backData = preview.back.match(/data:image\/png;base64,([^"']+)/)?.[1];
   if (frontData) fs.writeFileSync("verify-front.png", Buffer.from(frontData, "base64"));
   if (backData) fs.writeFileSync("verify-back.png", Buffer.from(backData, "base64"));
+  let ankiRegistration = null;
+  if (process.env.VERIFY_ANKI_REGISTER === "1") {
+    ankiRegistration = await panel.evaluate(
+      "window.bigcoachApp.registerCard({memo:'BigCoach Anki Studio verification',duplicateMode:'separate'})"
+    );
+    if (!ankiRegistration?.noteId) throw new Error("Anki test note was not registered");
+    fs.writeFileSync("verify-anki-note-id.txt", String(ankiRegistration.noteId));
+  }
   const shin = await panel.evaluate("window.bigcoachApp.navigate('nextShin')");
   mark("shin");
   console.error("step: shin");
@@ -180,6 +224,8 @@ async function main() {
         .every((label) => preview.back.includes(label)),
       outcomeValues
     },
+    captureDiagnostics: preview.captureDiagnostics,
+    ankiRegistration,
     dialog
   }, null, 2));
   bigCoach.close();

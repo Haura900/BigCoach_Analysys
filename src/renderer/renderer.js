@@ -341,7 +341,6 @@ $("#settings-save").addEventListener("click", async (event) => {
 });
 
 $("#preview-card").addEventListener("click", async () => {
-  window.bigcoachApp.setOverlayOpen(true);
   try {
     await action("何切る実行・カード画像作成中...", async () => {
       const preview = await window.bigcoachApp.previewCard($("#memo").value);
@@ -353,6 +352,9 @@ $("#preview-card").addEventListener("click", async () => {
       const warning = $("#duplicate-warning");
       warning.classList.toggle("hidden", !preview.duplicates.length);
       warning.textContent = preview.duplicates.length ? `同じ局面IDのカードが ${preview.duplicates.length} 件あります。登録方法を選択してください。` : "";
+      // WebContentsView を非表示にすると BigCoach iframe の requestAnimationFrame も停止する。
+      // 撮影と描画検証がすべて完了してから、プレビューダイアログのために非表示にする。
+      window.bigcoachApp.setOverlayOpen(true);
       $("#preview-dialog").showModal();
     });
   } catch {

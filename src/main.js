@@ -365,10 +365,15 @@ function candidateTable(title, analysis, mediaMode = "preview") {
 
 async function prepareCardImages() {
   await ensureAdapter();
+  await executeAdapter("window.__bigcoachDesktop.closeOverlays()");
   let frontState;
   let backState;
   try {
+    log("card capture: preparing front");
+    await ensureCardCaptureVisualState("front");
+    await waitForStablePaint("front");
     frontState = await executeAdapter("window.__bigcoachDesktop.prepareCapture('front')");
+    log(`card capture: front verified ${JSON.stringify(frontState.displayState)}`);
     let frontRect = frontState.rect;
     if (frontRect && frontState.relativeToFrame) {
       const frameRect = await bigCoachView.webContents.executeJavaScript(`(()=>{
@@ -383,15 +388,31 @@ async function prepareCardImages() {
         y: Math.floor(frontRect.y + frameRect.y)
       };
     }
-    const frontImage = frontRect
-      ? await bigCoachView.webContents.capturePage(frontRect)
-      : await bigCoachView.webContents.capturePage();
+    const frontImage = await Promise.race([
+      frontRect
+        ? bigCoachView.webContents.capturePage(frontRect)
+        : bigCoachView.webContents.capturePage(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("問題面の画像撮影が10秒でタイムアウトしました")), 10000))
+    ]);
+    log("card capture: front captured");
+    log("card capture: preparing back");
+    await ensureCardCaptureVisualState("back");
+    await waitForStablePaint("back");
     backState = await executeAdapter("window.__bigcoachDesktop.prepareCapture('back')");
-    const backImage = await bigCoachView.webContents.capturePage();
+    log(`card capture: back verified ${JSON.stringify(backState.displayState)}`);
+    const backImage = await Promise.race([
+      bigCoachView.webContents.capturePage(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("解答面の画像撮影が10秒でタイムアウトしました")), 10000))
+    ]);
+    log("card capture: back captured");
     currentCardImages = {
       frontDataUrl: frontImage.toDataURL(),
       backDataUrl: backImage.toDataURL(),
-      outcomes: backState?.outcomes || null
+      outcomes: backState?.outcomes || null,
+      captureDiagnostics: {
+        front: frontState?.displayState || null,
+        back: backState?.displayState || null
+      }
     };
     return currentCardImages;
   } finally {
@@ -401,6 +422,56 @@ async function prepareCardImages() {
       ).catch(() => {});
     }
   }
+}
+
+function cardVisualStateMatches(mode, state) {
+  return mode === "front"
+    ? !state.aiBarsVisible && !state.aiAdviceVisible && state.opponentsHidden
+    : state.aiBarsVisible && state.aiAdviceVisible && state.opponentsRevealed;
+}
+
+async function waitForStablePaint(mode) {
+  log(`card capture: waiting for ${mode} compositor paint`);
+  await executeAdapter("window.__bigcoachDesktop.waitForVisualPaint(5)");
+  bigCoachView.webContents.invalidate();
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  const first = await executeAdapter("window.__bigcoachDesktop.captureVisualState()");
+  await executeAdapter("window.__bigcoachDesktop.waitForVisualPaint(2)");
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const second = await executeAdapter("window.__bigcoachDesktop.captureVisualState()");
+  if (!cardVisualStateMatches(mode, first) || !cardVisualStateMatches(mode, second) ||
+      JSON.stringify(first) !== JSON.stringify(second)) {
+    throw new Error(
+      `${mode === "front" ? "問題面" : "解答面"}の描画が安定していません。` +
+      "BigCoachの表示更新完了後にもう一度お試しください。"
+    );
+  }
+  log(`card capture: ${mode} compositor stable ${JSON.stringify(second)}`);
+  return second;
+}
+
+async function ensureCardCaptureVisualState(mode) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    log(`card capture: ${mode} render attempt ${attempt + 1}`);
+    const renderResult = await executeAdapter(
+      `window.__bigcoachDesktop.renderCaptureMode(${JSON.stringify(mode)})`
+    );
+    log(`card capture: ${mode} render requested`);
+    if (!renderResult.ok) throw new Error(renderResult.reason);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    log(`card capture: ${mode} inspecting DOM`);
+    const state = await executeAdapter("window.__bigcoachDesktop.captureVisualState()");
+    log(`card capture: ${mode} DOM ${JSON.stringify(state)}`);
+    const matches = cardVisualStateMatches(mode, state);
+    if (matches) return state;
+  }
+  const state = await executeAdapter("window.__bigcoachDesktop.captureVisualState()");
+  throw new Error(
+    `${mode === "front" ? "問題面" : "解答面"}の実表示を準備できませんでした。` +
+    `AI棒グラフ=${state.aiBarsVisible ? "表示" : "非表示"}、` +
+    `AI候補表=${state.aiAdviceVisible ? "表示" : "非表示"}、` +
+    `相手手牌=${state.opponentsRevealed ? "表向き" : state.opponentsHidden ? "裏向き" : "判定不能"}`
+  );
 }
 
 function judgmentPrompt(scene) {
@@ -571,17 +642,22 @@ function registerIpc() {
       }),
       duplicates,
       simulation: currentSimulation,
-      comparison: comparisonStatus(scene, currentSimulation)
+      comparison: comparisonStatus(scene, currentSimulation),
+      captureDiagnostics: images.captureDiagnostics
     };
   });
   ipcMain.handle("anki:register", async (_event, payload) => {
     const scene = currentScene || await captureScene();
     await ensureSimulation(scene);
     const images = currentCardImages || await prepareCardImages();
-    const [frontName, backName] = await Promise.all([
-      anki.storeImage(images.frontDataUrl, scene.sceneId, "front"),
-      anki.storeImage(images.backDataUrl, scene.sceneId, "back")
-    ]);
+    let frontName;
+    let backName;
+    try {
+      frontName = await anki.storeImage(images.frontDataUrl, scene.sceneId, "front");
+      backName = await anki.storeImage(images.backDataUrl, scene.sceneId, "back");
+    } catch (error) {
+      throw new Error(`Ankiへ局面画像を送信できませんでした。${error.message}`);
+    }
     const tileCodes = new Set([
       scene.actualDiscard,
       scene.recommendedDiscard,
@@ -590,23 +666,31 @@ function registerIpc() {
         (analysis?.candidates || []).flatMap((candidate) =>
           [candidate.tile, ...(candidate.ukeire || []).map((item) => item.tile)]))
     ].filter((code) => tileFilename(code)));
-    await Promise.all([...tileCodes].map((code) => {
-      const filename = tileFilename(code);
-      const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
-      return anki.storeMedia(`bigcoach_tile_${filename}`, data);
-    }));
+    try {
+      for (const code of tileCodes) {
+        const filename = tileFilename(code);
+        const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
+        await anki.storeMedia(`bigcoach_tile_${filename}`, data);
+      }
+    } catch (error) {
+      throw new Error(`Ankiへ牌画像を送信できませんでした。${error.message}`);
+    }
     const html = cardHtml(scene, currentSimulation, payload.memo || "", {
       front: frontName,
       back: backName,
       outcomes: images.outcomes
     }, "anki");
-    return anki.add({
-      settings,
-      scene,
-      frontHtml: html.front,
-      backHtml: html.back,
-      duplicateMode: payload.duplicateMode || "skip"
-    });
+    try {
+      return await anki.add({
+        settings,
+        scene,
+        frontHtml: html.front,
+        backHtml: html.back,
+        duplicateMode: payload.duplicateMode || "skip"
+      });
+    } catch (error) {
+      throw new Error(`Ankiカード本体を登録できませんでした。${error.message}`);
+    }
   });
   ipcMain.handle("app:open-logs", () => shell.openPath(logPath));
   ipcMain.on("layout:overlay-open", (_event, open) => {
