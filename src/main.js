@@ -53,6 +53,7 @@ let adapterSource;
 let logPath;
 let authSessionStore;
 let quitAfterSessionFlush = false;
+let bigCoachHiddenForOverlay = false;
 
 function log(message) {
   const line = `${new Date().toISOString()} ${String(message)}\n`;
@@ -366,6 +367,11 @@ function candidateTable(title, analysis, mediaMode = "preview") {
 async function prepareCardImages() {
   await ensureAdapter();
   await executeAdapter("window.__bigcoachDesktop.closeOverlays()");
+  const initialDisplayState = await executeAdapter(
+    "window.__bigcoachDesktop.captureDisplayState()"
+  );
+  log(`card capture: initial display ${JSON.stringify(initialDisplayState)}`);
+  const finalDisplayState = { showMortal: true, showHands: true };
   let frontState;
   let backState;
   try {
@@ -411,16 +417,24 @@ async function prepareCardImages() {
       outcomes: backState?.outcomes || null,
       captureDiagnostics: {
         front: frontState?.displayState || null,
-        back: backState?.displayState || null
+        back: backState?.displayState || null,
+        initial: initialDisplayState,
+        final: null
       }
     };
     return currentCardImages;
   } finally {
-    if (frontState?.previous) {
-      await executeAdapter(
-        `window.__bigcoachDesktop.restoreCapture(${JSON.stringify(frontState.previous)})`
-      ).catch(() => {});
+    const restored = await executeAdapter(
+      `window.__bigcoachDesktop.restoreCapture(${JSON.stringify(finalDisplayState)})`
+    );
+    if (!restored.showMortal || !restored.showHands ||
+        !cardVisualStateMatches("back", restored.visualState)) {
+      throw new Error("カード画像撮影後にBigCoachを通常表示へ戻せませんでした");
     }
+    if (currentCardImages?.captureDiagnostics) {
+      currentCardImages.captureDiagnostics.final = restored;
+    }
+    log(`card capture: restored normal display ${JSON.stringify(restored)}`);
   }
 }
 
@@ -693,8 +707,14 @@ function registerIpc() {
     }
   });
   ipcMain.handle("app:open-logs", () => shell.openPath(logPath));
-  ipcMain.on("layout:overlay-open", (_event, open) => {
-    if (bigCoachView) bigCoachView.setVisible(!Boolean(open));
+  ipcMain.handle("layout:overlay-open", (_event, open) => {
+    const hidden = Boolean(open);
+    if (bigCoachView && hidden !== bigCoachHiddenForOverlay) {
+      bigCoachHiddenForOverlay = hidden;
+      bigCoachView.setVisible(!hidden);
+      log(`BigCoach view ${hidden ? "hidden" : "shown"} for app dialog`);
+    }
+    return { visible: !bigCoachHiddenForOverlay };
   });
   ipcMain.on("layout:panel-width", (_event, width) => {
     settings.panelWidth = Number(width);

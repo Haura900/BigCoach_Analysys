@@ -140,7 +140,7 @@ async function main() {
   }
   if (!previewDialogOpen) throw new Error("Card preview UI did not open after capture");
   await panel.evaluate("document.querySelector('#preview-close').click()");
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await new Promise((resolve) => setTimeout(resolve, 800));
   const preview = await panel.evaluate("window.bigcoachApp.previewCard('verification')");
   mark("preview");
   console.error("step: preview");
@@ -155,6 +155,12 @@ async function main() {
       preview.captureDiagnostics?.back?.aiAdviceVisible !== true ||
       preview.captureDiagnostics?.back?.opponentsRevealed !== true) {
     throw new Error("Card back is not in answer mode with AI bars and opponent hands shown");
+  }
+  if (preview.captureDiagnostics?.final?.showMortal !== true ||
+      preview.captureDiagnostics?.final?.showHands !== true ||
+      preview.captureDiagnostics?.final?.visualState?.aiBarsVisible !== true ||
+      preview.captureDiagnostics?.final?.visualState?.opponentsRevealed !== true) {
+    throw new Error("BigCoach did not finish card capture in normal display mode");
   }
   const frontPromptIndex = preview.front.search(/何切？|副露？|リーチ？/);
   const frontImageIndex = preview.front.indexOf("<img");
@@ -225,6 +231,7 @@ async function main() {
       outcomeValues
     },
     captureDiagnostics: preview.captureDiagnostics,
+    finalDisplay: preview.captureDiagnostics.final,
     ankiRegistration,
     dialog
   }, null, 2));

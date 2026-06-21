@@ -221,14 +221,19 @@ function renderTrendChart(trend) {
   <div class="trend-latest">最新: 各解析 ${percent(points.at(-1).current.rate)} ／ 通算 ${percent(points.at(-1).cumulative.rate)}　全${trend.length}解析</div>`;
 }
 
-function openDialog(dialog) {
-  window.bigcoachApp.setOverlayOpen(true);
-  dialog.showModal();
+async function syncBigCoachVisibility() {
+  const overlayOpen = $$("dialog").some((dialog) => dialog.open);
+  return window.bigcoachApp.setOverlayOpen(overlayOpen);
 }
 
-function closeDialog(dialog) {
+async function openDialog(dialog) {
+  dialog.showModal();
+  await syncBigCoachVisibility();
+}
+
+async function closeDialog(dialog) {
   dialog.close();
-  window.bigcoachApp.setOverlayOpen(false);
+  await syncBigCoachVisibility();
 }
 
 async function initialLoad() {
@@ -322,7 +327,7 @@ $("#diagnose").addEventListener("click", () => action("診断中...", async () =
 
 $("#settings-open").addEventListener("click", () => {
   populateSettings();
-  openDialog($("#settings-dialog"));
+  openDialog($("#settings-dialog")).catch((error) => toast(error.message || String(error), true));
 });
 
 $("#settings-save").addEventListener("click", async (event) => {
@@ -336,7 +341,7 @@ $("#settings-save").addEventListener("click", async (event) => {
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
   for (const name of ["shinMistakeThreshold", "simulatorTimeoutSec"]) data[name] = Number(data[name]);
   state.settings = await action("設定を保存中...", () => window.bigcoachApp.saveSettings(data));
-  closeDialog($("#settings-dialog"));
+  await closeDialog($("#settings-dialog"));
   toast("設定を保存しました。表示言語の変更はBigCoach再読込後に反映されます。");
 });
 
@@ -354,21 +359,23 @@ $("#preview-card").addEventListener("click", async () => {
       warning.textContent = preview.duplicates.length ? `同じ局面IDのカードが ${preview.duplicates.length} 件あります。登録方法を選択してください。` : "";
       // WebContentsView を非表示にすると BigCoach iframe の requestAnimationFrame も停止する。
       // 撮影と描画検証がすべて完了してから、プレビューダイアログのために非表示にする。
-      window.bigcoachApp.setOverlayOpen(true);
       $("#preview-dialog").showModal();
+      await syncBigCoachVisibility();
     });
   } catch {
-    window.bigcoachApp.setOverlayOpen(false);
+    await syncBigCoachVisibility();
   }
 });
 
-$("#preview-close").addEventListener("click", () => closeDialog($("#preview-dialog")));
+$("#preview-close").addEventListener("click", () => {
+  closeDialog($("#preview-dialog")).catch((error) => toast(error.message || String(error), true));
+});
 $("#register-card").addEventListener("click", () => action("Ankiへ登録中...", async () => {
   const result = await window.bigcoachApp.registerCard({
     memo: $("#memo").value,
     duplicateMode: $("#duplicate-mode").value
   });
-  closeDialog($("#preview-dialog"));
+  await closeDialog($("#preview-dialog"));
   if (result.skipped) toast("重複カードのため登録をスキップしました");
   else if (result.updated) toast(`既存カードを更新しました（ID: ${result.noteId}）`);
   else toast(`Ankiカードを登録しました（ID: ${result.noteId}）`);
@@ -381,7 +388,9 @@ $("#refresh-stats").addEventListener("click", () => action("シン悪手率を�
 }));
 
 for (const dialog of $$("dialog")) {
-  dialog.addEventListener("close", () => window.bigcoachApp.setOverlayOpen(false));
+  dialog.addEventListener("close", () => {
+    syncBigCoachVisibility().catch((error) => toast(error.message || String(error), true));
+  });
 }
 window.bigcoachApp.onBigCoachStatus((status) => {
   $("#browser-status").textContent = status.ok ? "BigCoach表示: 接続済み" : `BigCoach表示: ${status.message || "エラー"}`;

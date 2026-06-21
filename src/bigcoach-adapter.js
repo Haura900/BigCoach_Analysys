@@ -494,6 +494,17 @@
     return { ok: true };
   }
 
+  function captureDisplayState() {
+    const page = doc();
+    const game = page.defaultView?.MM?.GS;
+    if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
+    return {
+      showMortal: Boolean(game.showMortal),
+      showHands: Boolean(game.showHands),
+      visualState: captureVisualState()
+    };
+  }
+
   async function ensureCaptureVisualState(mode) {
     const state = captureVisualState();
     if (visualStateMatches(mode, state)) return state;
@@ -518,7 +529,6 @@
     const page = doc();
     const game = page.defaultView?.MM?.GS;
     if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
-    const previous = { showMortal: Boolean(game.showMortal), showHands: Boolean(game.showHands) };
     const verifiedState = await ensureCaptureVisualState(mode);
     const frame = analysisFrame();
     const frameRect = frame?.getBoundingClientRect() || { x: 0, y: 0 };
@@ -529,7 +539,6 @@
       return match ? Number(match[1]) : null;
     };
     return {
-      previous,
       hiddenOuterCount: hiddenOuter.length,
       relativeToFrame: !frame,
       displayState: {
@@ -557,7 +566,14 @@
   async function restoreCapture(previous) {
     const page = doc();
     const game = page.defaultView?.MM?.GS;
-    if (!game || !previous) return;
+    if (!game || !previous) return null;
+    const current = captureDisplayState();
+    if (current.showMortal === Boolean(previous.showMortal) &&
+        current.showHands === Boolean(previous.showHands) &&
+        visualStateMatches(previous.showMortal && previous.showHands ? "back" : "front", current.visualState)) {
+      closeOverlays();
+      return current;
+    }
     game.showMortal = Boolean(previous.showMortal);
     game.showHands = Boolean(previous.showHands);
     game.ui.updateHandInfo();
@@ -572,6 +588,8 @@
       }
     }
     closeOverlays();
+    await waitForVisualPaint(5);
+    return captureDisplayState();
   }
 
   window.__bigcoachDesktop = {
@@ -582,6 +600,7 @@
     goToMismatch,
     goToPosition,
     captureVisualState,
+    captureDisplayState,
     waitForVisualPaint,
     renderCaptureMode,
     prepareCapture,

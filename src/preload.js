@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld("bigcoachApp", {
   reloadBigCoach: () => ipcRenderer.invoke("bigcoach:reload"),
   openLogs: () => ipcRenderer.invoke("app:open-logs"),
   setPanelWidth: (width) => ipcRenderer.send("layout:panel-width", width),
-  setOverlayOpen: (open) => ipcRenderer.send("layout:overlay-open", open),
+  setOverlayOpen: (open) => ipcRenderer.invoke("layout:overlay-open", open),
   onBigCoachStatus: (callback) => {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on("bigcoach:status", listener);
