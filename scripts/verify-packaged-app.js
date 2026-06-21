@@ -59,6 +59,24 @@ async function main() {
   const first = await panel.evaluate("window.bigcoachApp.refreshScene()");
   mark("scene");
   console.error("step: scene");
+  if (process.env.VERIFY_MAJOR_THRESHOLD === "1") {
+    const target = await bigCoach.evaluate(`window.__bigcoachDesktop.listDecisions().then((items) =>
+      items.find((item) => item.roundText === "東3局" && item.turn === 3 && item.actual === "1m"))`);
+    if (!target) throw new Error("東3局3巡目の打1mを見つけられませんでした");
+    await bigCoach.evaluate(`window.__bigcoachDesktop.goToPosition(${target.handCounter},${target.plyCounter})`);
+    const scene = await panel.evaluate("window.bigcoachApp.refreshScene()");
+    if (scene.majorMistake?.isMajor) throw new Error("23.114%の打1mが大悪手に判定されています");
+    console.log(JSON.stringify({
+      roundText: scene.roundText,
+      turn: scene.currentTurn,
+      actual: scene.actualDiscard,
+      actualProbability: scene.majorMistake.actualProbability,
+      majorMistake: scene.majorMistake
+    }, null, 2));
+    bigCoach.close();
+    panel.close();
+    return;
+  }
   const stats = await panel.evaluate("window.bigcoachApp.refreshStats()");
   const major = await panel.evaluate("window.bigcoachApp.listMajorMistakes()");
   mark("major");

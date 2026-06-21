@@ -176,7 +176,7 @@ async function captureScene() {
     ...normalized,
     screenshotDataUrl: null,
     shinMistake: classifyShinMistake(decision, settings),
-    majorMistake: classifyMajorMistake(decision)
+    majorMistake: classifyMajorMistake(decision, settings)
   };
   currentSimulation = null;
   currentCardImages = null;
@@ -217,7 +217,7 @@ async function navigate(kind) {
   } else if (kind.endsWith("Shin")) {
     targets = listShinMistakes(decisions, settings);
   } else if (kind.endsWith("Major")) {
-    targets = listMajorMistakes(decisions);
+    targets = listMajorMistakes(decisions, settings);
   } else {
     throw new Error(`未対応の移動操作です: ${kind}`);
   }
@@ -235,16 +235,16 @@ async function navigate(kind) {
 
 async function loadMajorMistakes() {
   const decisions = await loadDecisions();
-  currentMajorMistakes = listMajorMistakes(decisions);
+  currentMajorMistakes = listMajorMistakes(decisions, settings);
   return {
     items: currentMajorMistakes,
-    definition: "1シャンテン以下・聴牌・他家リーチ時の、実打とAI推奨が異なる局面"
+    definition: `1シャンテン以下・聴牌・他家リーチ時に、実打とAI推奨が異なり、実打推奨度が${(Number(settings.shinMistakeThreshold) * 100).toFixed(1)}%以下の局面`
   };
 }
 
 async function goToMajorMistake(mismatchOrdinal) {
   const decisions = await loadDecisions();
-  const target = listMajorMistakes(decisions).find((item) =>
+  const target = listMajorMistakes(decisions, settings).find((item) =>
     Number(item.mismatchOrdinal) === Number(mismatchOrdinal));
   if (!target) throw new Error("指定した大悪手が見つかりませんでした。");
   return goToDecision(target);

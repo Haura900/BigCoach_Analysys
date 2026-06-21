@@ -29,10 +29,20 @@ test("シン悪手は条件局面かつAI推奨度以下で判定する", () => 
   assert.equal(classifyShinMistake({ ...base, actualProbability: 0.005 }).isShin, false);
 });
 
-test("大悪手は1シャンテン以下・聴牌・他家リーチ時の悪手", () => {
-  assert.equal(classifyMajorMistake({ ...base, shanten: 1 }).isMajor, true);
-  assert.equal(classifyMajorMistake({ ...base, shanten: 2 }).isMajor, false);
-  assert.equal(classifyMajorMistake({ ...base, shanten: 4, opponentRiichi: true }).isMajor, true);
+test("大悪手は局面条件とAI推奨度上限の両方で判定する", () => {
+  const threshold = { shinMistakeThreshold: 0.001 };
+  assert.equal(classifyMajorMistake(
+    { ...base, shanten: 1, actualProbability: 0.0005 }, threshold
+  ).isMajor, true);
+  assert.equal(classifyMajorMistake(
+    { ...base, shanten: 1, actualProbability: 0.23114 }, threshold
+  ).isMajor, false);
+  assert.equal(classifyMajorMistake(
+    { ...base, shanten: 2, actualProbability: 0.0005 }, threshold
+  ).isMajor, false);
+  assert.equal(classifyMajorMistake(
+    { ...base, shanten: 4, opponentRiichi: true, actualProbability: 0.0005 }, threshold
+  ).isMajor, true);
 });
 
 test("自分のリーチ後を除外し、リーチした瞬間は含める", () => {
