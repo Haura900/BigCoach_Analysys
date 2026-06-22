@@ -371,7 +371,7 @@ async function prepareCardImages() {
     "window.__bigcoachDesktop.captureDisplayState()"
   );
   log(`card capture: initial display ${JSON.stringify(initialDisplayState)}`);
-  const finalDisplayState = { showMortal: true, showHands: true };
+  const finalDisplayState = { showMortal: true, showHands: false };
   let frontState;
   let backState;
   try {
@@ -427,9 +427,11 @@ async function prepareCardImages() {
     const restored = await executeAdapter(
       `window.__bigcoachDesktop.restoreCapture(${JSON.stringify(finalDisplayState)})`
     );
-    if (!restored.showMortal || !restored.showHands ||
-        !cardVisualStateMatches("back", restored.visualState)) {
-      throw new Error("カード画像撮影後にBigCoachを通常表示へ戻せませんでした");
+    if (!restored.showMortal || restored.showHands ||
+        !restored.visualState.aiBarsVisible ||
+        !restored.visualState.aiAdviceVisible ||
+        !restored.visualState.opponentsHidden) {
+      throw new Error("カード画像撮影後にAI評価表示・他家手牌非表示へ戻せませんでした");
     }
     if (currentCardImages?.captureDiagnostics) {
       currentCardImages.captureDiagnostics.final = restored;

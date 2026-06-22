@@ -53,7 +53,7 @@ test("Anki registration waits until BigCoach is visible again", () => {
   assert.match(source, /const overlayOpen = \$\$\("dialog"\)\.some\(\(dialog\) => dialog\.open\)/);
 });
 
-test("card capture finishes in normal BigCoach display mode", () => {
+test("card capture finishes with AI visible and opponent hands hidden", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "main.js"),
     "utf8"
@@ -68,6 +68,7 @@ test("card capture finishes in normal BigCoach display mode", () => {
   assert.ok(inspectInitial >= 0);
   assert.ok(renderFront > inspectInitial, "the initial state must be inspected before front mode is rendered");
   assert.ok(restoreOriginal > renderFront, "the saved original state must be restored after capture");
-  assert.match(handler, /const finalDisplayState = \{ showMortal: true, showHands: true \}/);
-  assert.match(handler, /cardVisualStateMatches\("back", restored\.visualState\)/);
+  assert.match(handler, /const finalDisplayState = \{ showMortal: true, showHands: false \}/);
+  assert.match(handler, /restored\.visualState\.aiBarsVisible/);
+  assert.match(handler, /restored\.visualState\.opponentsHidden/);
 });

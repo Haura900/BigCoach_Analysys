@@ -464,6 +464,16 @@
       : state.aiBarsVisible && state.aiAdviceVisible && state.opponentsRevealed;
   }
 
+  function displayStateMatches(expected, state) {
+    const mortalMatches = expected.showMortal
+      ? state.aiBarsVisible && state.aiAdviceVisible
+      : !state.aiBarsVisible && !state.aiAdviceVisible;
+    const handsMatch = expected.showHands
+      ? state.opponentsRevealed
+      : state.opponentsHidden;
+    return mortalMatches && handsMatch;
+  }
+
   async function waitForVisualPaint(frameCount = 4) {
     const view = doc().defaultView;
     for (let index = 0; index < frameCount; index += 1) {
@@ -570,7 +580,7 @@
     const current = captureDisplayState();
     if (current.showMortal === Boolean(previous.showMortal) &&
         current.showHands === Boolean(previous.showHands) &&
-        visualStateMatches(previous.showMortal && previous.showHands ? "back" : "front", current.visualState)) {
+        displayStateMatches(previous, current.visualState)) {
       closeOverlays();
       return current;
     }

@@ -157,10 +157,11 @@ async function main() {
     throw new Error("Card back is not in answer mode with AI bars and opponent hands shown");
   }
   if (preview.captureDiagnostics?.final?.showMortal !== true ||
-      preview.captureDiagnostics?.final?.showHands !== true ||
+      preview.captureDiagnostics?.final?.showHands !== false ||
       preview.captureDiagnostics?.final?.visualState?.aiBarsVisible !== true ||
-      preview.captureDiagnostics?.final?.visualState?.opponentsRevealed !== true) {
-    throw new Error("BigCoach did not finish card capture in normal display mode");
+      preview.captureDiagnostics?.final?.visualState?.aiAdviceVisible !== true ||
+      preview.captureDiagnostics?.final?.visualState?.opponentsHidden !== true) {
+    throw new Error("BigCoach did not finish with AI visible and opponent hands hidden");
   }
   const frontPromptIndex = preview.front.search(/何切？|副露？|リーチ？/);
   const frontImageIndex = preview.front.indexOf("<img");
