@@ -115,6 +115,14 @@ async function main() {
   const jumped = await panel.evaluate("window.bigcoachApp.navigate('nextMajor')");
   mark("jumped");
   console.error("step: jumped");
+  const nanikiruStartedAt = Date.now();
+  const nanikiruJumped = await panel.evaluate("window.bigcoachApp.navigate('nextNanikiru')");
+  const nanikiruFirstElapsedMs = Date.now() - nanikiruStartedAt;
+  if (!nanikiruJumped?.nanikiruMistake?.isNanikiruMistake) {
+    throw new Error("Previous/next nanikiru mistake navigation did not reach a qualified scene");
+  }
+  mark("nanikiru-jumped");
+  console.error("step: nanikiru-jumped");
   await panel.evaluate(`(()=>{
     document.querySelector("#memo").value = "verification";
     document.querySelector("#preview-card").click();
@@ -156,6 +164,29 @@ async function main() {
       preview.captureDiagnostics?.back?.opponentsRevealed !== true) {
     throw new Error("Card back is not in answer mode with AI bars and opponent hands shown");
   }
+  if (!preview.nanikiruMistake ||
+      !["complete", "judgment", "mistake", "opponent-riichi", "opponent-call", "turn", "unnecessary", "shanten"]
+        .includes(preview.nanikiruMistake.stage)) {
+    throw new Error("Nanikiru mistake staged classification was not returned");
+  }
+  if (!preview.nanikiruMistake.isNanikiruMistake || !preview.nanikiruMistakeCard ||
+      !preview.nanikiruMistakeCard.front.includes("data-schema=\"bigcoach-nanikiru-mistake-v1\"") ||
+      !preview.nanikiruMistakeCard.back.includes("bigcoach-nanikiru-mistake/v1")) {
+    throw new Error("Qualified nanikiru mistake flat card preview was not generated");
+  }
+  const flatFront = preview.nanikiruMistakeCard.front;
+  const flatMetadataIndex = flatFront.indexOf("<small>場風</small>");
+  const flatHandIndex = flatFront.indexOf("data-hand-mpsz=");
+  const flatHandImages = (flatFront.match(/data-hand-mpsz=/g) || []).length;
+  if (!(flatMetadataIndex >= 0 && flatHandIndex > flatMetadataIndex && flatHandImages === 1 &&
+      /data:image\/svg\+xml;base64/.test(flatFront))) {
+    throw new Error("Flat card does not place metadata above one combined SVG hand image");
+  }
+  if (!preview.nanikiruMistakeCard.back.includes("補正無の何切る結果") ||
+      !preview.nanikiruMistakeCard.back.includes("<table>") ||
+      !preview.nanikiruMistakeCard.structured?.simulatorWithoutRiverAdjustmentCandidates?.length) {
+    throw new Error("Flat card does not include the unadjusted simulator result");
+  }
   if (preview.captureDiagnostics?.final?.showMortal !== true ||
       preview.captureDiagnostics?.final?.showHands !== false ||
       preview.captureDiagnostics?.final?.visualState?.aiBarsVisible !== true ||
@@ -190,6 +221,9 @@ async function main() {
     fs.writeFileSync("verify-anki-note-id.txt", String(ankiRegistration.noteId));
   }
   const shin = await panel.evaluate("window.bigcoachApp.navigate('nextShin')");
+  if (shin.roundText === nanikiruJumped.roundText && shin.currentTurn === nanikiruJumped.currentTurn) {
+    throw new Error("Shin navigation did not exclude the nanikiru mistake");
+  }
   mark("shin");
   console.error("step: shin");
   await panel.evaluate("document.querySelector('#settings-open').click()");
@@ -222,6 +256,14 @@ async function main() {
       isShin: shin.shinMistake?.isShin
     },
     simulator: preview.comparison,
+    nanikiruMistake: preview.nanikiruMistake,
+    nanikiruNavigation: {
+      firstElapsedMs: nanikiruFirstElapsedMs,
+      first: {
+        roundText: nanikiruJumped.roundText,
+        turn: nanikiruJumped.currentTurn
+      }
+    },
     cardImages: {
       front: /data:image\/png;base64,/.test(preview.front),
       back: /data:image\/png;base64,/.test(preview.back),

@@ -30,6 +30,8 @@
         <button data-nav="nextShin">次のシン悪手</button>
         <button data-nav="previousMajor">前の大悪手</button>
         <button data-nav="nextMajor">次の大悪手</button>
+        <button data-nav="previousNanikiru">前の何切る悪手</button>
+        <button data-nav="nextNanikiru">次の何切る悪手</button>
       </div>
       <div id="shin-status" class="definition">シン悪手: BigCoach推奨と実打の評価差が設定基準以上の局面。</div>
       <button id="major-mistakes-toggle" class="danger-action action">大悪手一覧を表示</button>
@@ -43,7 +45,10 @@
       <h2>Ankiカード</h2>
       <label for="memo">解説用メモ</label>
       <textarea id="memo" rows="4" placeholder="後で思い出したい判断理由など"></textarea>
+      <div id="nanikiru-mistake-status" class="definition">何切る悪手: 局面取得後に判定します</div>
       <button id="preview-card" class="primary action">カード内容をプレビュー</button>
+      <button id="bulk-register-nanikiru" class="action">何切る悪手を一括でデッキに登録</button>
+      <div id="nanikiru-bulk-status" class="definition"></div>
     </section>
 
     <section>
@@ -107,6 +112,7 @@
     <form method="dialog" id="settings-form">
       <h2>設定</h2>
       <label>Ankiデッキ名<input name="deckName" required></label>
+      <label>何切る悪手デッキ名<input name="nanikiruMistakeDeckName" required></label>
       <label>Ankiノートタイプ<input name="modelName" required></label>
       <label>タグ（カンマ区切り）<input name="tags"></label>
       <label>BigCoach表示言語
@@ -138,6 +144,13 @@
       <article><h3>問題面</h3><div id="front-preview" class="card-preview"></div></article>
       <article><h3>解答面</h3><div id="back-preview" class="card-preview"></div></article>
     </div>
+    <section id="nanikiru-mistake-preview" class="hidden">
+      <h3>何切る悪手デッキへ追加される平面カード</h3>
+      <div class="preview-columns">
+        <article><h3>問題面</h3><div id="nanikiru-front-preview" class="card-preview"></div></article>
+        <article><h3>解答面</h3><div id="nanikiru-back-preview" class="card-preview"></div></article>
+      </div>
+    </section>
     <div class="register-row">
       <label>重複時
         <select id="duplicate-mode">

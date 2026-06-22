@@ -71,6 +71,7 @@ function renderScene(scene) {
   ];
   if (scene.shinMistake?.eligible) chips.push(scene.shinMistake.isShin ? "シン悪手" : "非シン悪手");
   if (scene.majorMistake?.isMajor) chips.push("大悪手");
+  if (scene.nanikiruMistake?.isNanikiruMistake) chips.push("何切る悪手");
   $("#scene-chips").innerHTML = chips.map((text, index) =>
     `<span class="chip ${text === "大悪手" || text === "シン悪手" ? "shin" : ""}">${escapeHtml(text)}</span>`).join("");
   const missing = $("#missing-info");
@@ -83,7 +84,19 @@ function renderScene(scene) {
   } — ${scene.shinMistake?.reason || "評価なし"}。大悪手: ${
       scene.majorMistake?.isMajor ? "該当" : "非該当"
     } — ${scene.majorMistake?.reason || "評価なし"}。`;
+  renderNanikiruMistake(scene.nanikiruMistake);
   renderResults();
+}
+
+function renderNanikiruMistake(result) {
+  const element = $("#nanikiru-mistake-status");
+  if (!result) {
+    element.textContent = "何切る悪手: 未判定";
+    return;
+  }
+  element.textContent = `何切る悪手: ${result.isNanikiruMistake ? "該当" :
+    result.eligible ? "シミュレーター判定待ち" : "非該当"} — ${result.reason}`;
+  element.classList.toggle("diagnostic-ng", Boolean(result.isNanikiruMistake));
 }
 
 function renderComparison(comparison) {
@@ -278,7 +291,9 @@ $("#run-simulation").addEventListener("click", () => action("何切るシミュ�
   if (!state.scene) renderScene(await window.bigcoachApp.refreshScene());
   const result = await window.bigcoachApp.runSimulation();
   state.simulation = result.simulation;
+  if (state.scene) state.scene.nanikiruMistake = result.nanikiruMistake;
   renderComparison(result.comparison);
+  renderNanikiruMistake(result.nanikiruMistake);
   renderResults();
   toast("シミュレーターが完了しました");
 }));
@@ -350,10 +365,16 @@ $("#preview-card").addEventListener("click", async () => {
     await action("何切る実行・カード画像作成中...", async () => {
       const preview = await window.bigcoachApp.previewCard($("#memo").value);
       state.simulation = preview.simulation;
+      if (state.scene) state.scene.nanikiruMistake = preview.nanikiruMistake;
       renderComparison(preview.comparison);
+      renderNanikiruMistake(preview.nanikiruMistake);
       renderResults();
       $("#front-preview").innerHTML = preview.front;
       $("#back-preview").innerHTML = preview.back;
+      const nanikiruPreview = $("#nanikiru-mistake-preview");
+      nanikiruPreview.classList.toggle("hidden", !preview.nanikiruMistakeCard);
+      $("#nanikiru-front-preview").innerHTML = preview.nanikiruMistakeCard?.front || "";
+      $("#nanikiru-back-preview").innerHTML = preview.nanikiruMistakeCard?.back || "";
       const warning = $("#duplicate-warning");
       warning.classList.toggle("hidden", !preview.duplicates.length);
       warning.textContent = preview.duplicates.length ? `同じ局面IDのカードが ${preview.duplicates.length} 件あります。登録方法を選択してください。` : "";
@@ -376,10 +397,26 @@ $("#register-card").addEventListener("click", () => action("Ankiへ登録中..."
     duplicateMode: $("#duplicate-mode").value
   });
   await closeDialog($("#preview-dialog"));
-  if (result.skipped) toast("重複カードのため登録をスキップしました");
-  else if (result.updated) toast(`既存カードを更新しました（ID: ${result.noteId}）`);
-  else toast(`Ankiカードを登録しました（ID: ${result.noteId}）`);
+  const extra = result.nanikiruMistake?.qualified
+    ? `何切る悪手デッキ「${result.nanikiruMistake.deckName}」にのみ登録`
+    : "";
+  if (result.skipped) toast(extra || "重複カードのため登録をスキップしました");
+  else if (result.updated) toast(extra
+    ? `${extra}し、既存カードを更新しました（ID: ${result.noteId}）`
+    : `既存カードを更新しました（ID: ${result.noteId}）`);
+  else toast(extra
+    ? `${extra}しました（ID: ${result.noteId}）`
+    : `Ankiカードを登録しました（ID: ${result.noteId}）`);
 }));
+
+$("#bulk-register-nanikiru").addEventListener("click", () =>
+  action("何切る悪手を抽出・登録中...", async () => {
+    const result = await window.bigcoachApp.bulkRegisterNanikiru();
+    const message = `候補${result.candidates}件／該当${result.qualified}件／追加${result.added}件／` +
+      `重複スキップ${result.skipped}件／失敗${result.failed.length}件`;
+    $("#nanikiru-bulk-status").textContent = message;
+    toast(message, result.failed.length > 0);
+  }));
 
 $("#open-logs").addEventListener("click", () => window.bigcoachApp.openLogs());
 $("#refresh-stats").addEventListener("click", () => action("シン悪手率を計算中...", async () => {
@@ -398,6 +435,11 @@ window.bigcoachApp.onBigCoachStatus((status) => {
   if (status.history) renderHistory(status.history);
 });
 window.bigcoachApp.onStatsUpdated((result) => renderStats(result));
+window.bigcoachApp.onNanikiruBulkProgress((progress) => {
+  $("#nanikiru-bulk-status").textContent = progress.complete
+    ? `完了: 追加${progress.added}件／重複${progress.skipped}件／失敗${progress.failed.length}件`
+    : `${progress.current} / ${progress.total}　${progress.roundText || ""} ${progress.turn || ""}巡目`;
+});
 
 window.addEventListener("resize", () => {
   const width = $("#panel").getBoundingClientRect().width;

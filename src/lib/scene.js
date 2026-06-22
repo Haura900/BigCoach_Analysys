@@ -35,6 +35,7 @@ function normalizeScene(raw, url) {
   const claimedBySeat = raw.claimedBySeat || [[], [], [], []];
   const discardsBySeat = raw.discardsBySeat || [[], [], [], []];
   const callTiles = callsBySeat.flat();
+  const opponentCallTiles = callsBySeat.slice(1).flat();
   const claimedTiles = claimedBySeat.flat();
   const riverTiles = subtractTiles(discardsBySeat.flat(), claimedTiles);
   const selfCallTiles = callsBySeat[0] || [];
@@ -66,6 +67,7 @@ function normalizeScene(raw, url) {
     drawTile: raw.drawTile || (handTiles.length % 3 === 2 ? handTiles.at(-1) : null),
     riverTiles,
     callTiles,
+    opponentCallTiles,
     selfCallTiles,
     selfMelds: buildMelds(selfCallTiles),
     doraTiles: [...(raw.doraTiles || [])],

@@ -39,6 +39,106 @@ test("Anki card section is directly below scene navigation", () => {
   assert.ok(reviewUrl > anki);
 });
 
+test("settings expose a separate deck for nanikiru mistakes", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "renderer", "index.html"),
+    "utf8"
+  );
+  assert.match(source, /name="nanikiruMistakeDeckName"/);
+});
+
+test("navigation exposes previous and next nanikiru mistake buttons", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "renderer", "index.html"),
+    "utf8"
+  );
+  assert.match(source, /data-nav="previousNanikiru"/);
+  assert.match(source, /data-nav="nextNanikiru"/);
+});
+
+test("UI exposes bulk nanikiru mistake registration", () => {
+  const html = fs.readFileSync(
+    path.join(__dirname, "..", "src", "renderer", "index.html"),
+    "utf8"
+  );
+  const preload = fs.readFileSync(
+    path.join(__dirname, "..", "src", "preload.js"),
+    "utf8"
+  );
+  assert.match(html, /id="bulk-register-nanikiru"/);
+  assert.match(preload, /bulkRegisterNanikiru/);
+});
+
+test("flat nanikiru card places metadata above one combined hand image", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const start = source.indexOf("function nanikiruMistakeCardHtml");
+  const end = source.indexOf("async function refreshStats", start);
+  const card = source.slice(start, end);
+  const metadata = card.indexOf("<div><small>場風");
+  const handImage = card.indexOf('<img src="${escapeHtml(handImage)}"');
+  assert.ok(metadata >= 0 && handImage > metadata);
+  assert.match(source, /function tileStripSvg\(codes\)/);
+  assert.match(card, /<img src="\$\{escapeHtml\(handImage\)\}"/);
+});
+
+test("flat nanikiru card includes the unadjusted simulator result table", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const start = source.indexOf("function nanikiruMistakeCardHtml");
+  const end = source.indexOf("async function refreshStats", start);
+  const card = source.slice(start, end);
+  assert.match(card, /補正無の何切る結果/);
+  assert.match(card, /simulation\.withoutWall/);
+  assert.match(card, /simulatorWithoutRiverAdjustmentCandidates/);
+});
+
+test("unadjusted result candidate and ukeire tile media are stored for Anki", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const start = source.indexOf("async function storeTileMediaForNanikiru");
+  const end = source.indexOf("async function registerNanikiruMistakeCard", start);
+  const media = source.slice(start, end);
+  assert.match(media, /simulation\?\.withoutWall\?\.candidates/);
+  assert.match(media, /candidate\.ukeire/);
+});
+
+test("shin and major navigation use the nanikiru exclusion path", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  assert.match(source, /kind\.endsWith\("Shin"\) \|\| kind\.endsWith\("Major"\)/);
+  assert.match(source, /return navigateExcludingNanikiru\(kind, targets, current\)/);
+});
+
+test("nanikiru mistakes register exclusively to the dedicated deck", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const handlerStart = source.indexOf('ipcMain.handle("anki:register"');
+  const handlerEnd = source.indexOf('ipcMain.handle("app:open-logs"', handlerStart);
+  const handler = source.slice(handlerStart, handlerEnd);
+  const qualifiedBranch = handler.indexOf("if (classification.isNanikiruMistake)");
+  const dedicatedAdd = handler.indexOf("registerNanikiruMistakeCard(", qualifiedBranch);
+  const qualifiedReturn = handler.indexOf("return {", dedicatedAdd);
+  const normalImages = handler.indexOf("let frontName", qualifiedReturn);
+  const normalAdd = handler.indexOf("const normalRegistration = await anki.add", normalImages);
+
+  assert.ok(qualifiedBranch >= 0);
+  assert.ok(dedicatedAdd > qualifiedBranch);
+  assert.ok(qualifiedReturn > dedicatedAdd);
+  assert.ok(normalImages > qualifiedReturn);
+  assert.ok(normalAdd > normalImages, "normal deck registration must be outside the qualified branch");
+});
+
 test("Anki registration waits until BigCoach is visible again", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "renderer", "renderer.js"),

@@ -7,6 +7,7 @@ const { normalizeScene, validateScene } = require("./lib/scene");
 const { SimulatorService } = require("./lib/simulator");
 const { AnkiService } = require("./lib/anki");
 const { AuthSessionStore } = require("./lib/auth-session");
+const { codesToMpsz } = require("./lib/tiles");
 const {
   classifyShinMistake,
   classifyMajorMistake,
@@ -19,10 +20,16 @@ const {
   summarizeRecords,
   buildTrend
 } = require("./lib/stats");
+const {
+  prefilterNanikiruDecisions,
+  precheckNanikiruMistake,
+  classifyNanikiruMistake
+} = require("./lib/nanikiru-mistake");
 
 const DEFAULT_SETTINGS = {
-  settingsVersion: 2,
+  settingsVersion: 3,
   deckName: "BigCoach",
+  nanikiruMistakeDeckName: "BigCoach::何切る悪手",
   modelName: "基本",
   tags: ["BigCoach", "何切る"],
   language: "ja",
@@ -43,6 +50,7 @@ let currentScene;
 let currentSimulation;
 let currentMajorMistakes = [];
 let currentDecisions = [];
+let currentNanikiruMistakes = null;
 let currentCardImages;
 let tileImageCache;
 let statsRefreshTimer;
@@ -86,8 +94,8 @@ function loadSettings() {
     const saved = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
     if (!saved.settingsVersion || saved.settingsVersion < 2) {
       if (Number(saved.shinMistakeThreshold) === 0.1) saved.shinMistakeThreshold = 0.001;
-      saved.settingsVersion = 2;
     }
+    saved.settingsVersion = 3;
     return { ...DEFAULT_SETTINGS, ...saved };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -102,6 +110,7 @@ function saveSettings(next) {
   };
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), "utf8");
+  currentNanikiruMistakes = null;
   layoutViews();
   return settings;
 }
@@ -207,7 +216,11 @@ async function captureScene() {
     ...normalized,
     screenshotDataUrl: null,
     shinMistake: classifyShinMistake(decision, settings),
-    majorMistake: classifyMajorMistake(decision, settings)
+    majorMistake: classifyMajorMistake(decision, settings),
+    nanikiruMistake: {
+      ...precheckNanikiruMistake(normalized),
+      isNanikiruMistake: false
+    }
   };
   currentSimulation = null;
   currentCardImages = null;
@@ -234,10 +247,101 @@ async function goToDecision(decision) {
   return captureScene();
 }
 
+function nanikiruPositionKey(decision) {
+  return `${Number(decision.handCounter)}:${Number(decision.plyCounter)}`;
+}
+
+function ensureNanikiruCache() {
+  if (!currentNanikiruMistakes) {
+    currentNanikiruMistakes = { evaluated: new Map() };
+  }
+  return currentNanikiruMistakes;
+}
+
+async function evaluateNanikiruDecision(decision) {
+  const cache = ensureNanikiruCache();
+  const key = nanikiruPositionKey(decision);
+  if (cache.evaluated.has(key)) return cache.evaluated.get(key);
+  const scene = await goToDecision(decision);
+  const precheck = precheckNanikiruMistake(scene);
+  if (!precheck.eligible) {
+    const result = { scene, simulation: null, classification: { ...precheck, isNanikiruMistake: false } };
+    cache.evaluated.set(key, result);
+    return result;
+  }
+  log(`nanikiru scan: simulating ${key} ${scene.roundText} ${scene.currentTurn}巡目`);
+  const simulation = await simulator.analyze(scene, settings);
+  const classification = classifyNanikiruMistake(scene, simulation);
+  const result = { scene, simulation, classification };
+  cache.evaluated.set(key, result);
+  if (classification.isNanikiruMistake) log(`nanikiru scan: matched ${key}`);
+  return result;
+}
+
+async function navigateNanikiru(kind, decisions, current) {
+  ensureNanikiruCache();
+  const direction = kind.startsWith("previous") ? -1 : 1;
+  const candidates = prefilterNanikiruDecisions(decisions).sort(comparePosition);
+  if (!candidates.length) throw new Error("何切る悪手の事前条件を満たす局面がありません。");
+  const currentPosition = {
+    handCounter: Number(current?.handCounter ?? -1),
+    plyCounter: Number(current?.plyCounter ?? -1)
+  };
+  const start = direction > 0
+    ? candidates.findIndex((item) => comparePosition(item, currentPosition) > 0)
+    : [...candidates].reverse().findIndex((item) => comparePosition(item, currentPosition) < 0);
+  const normalizedStart = start < 0
+    ? 0
+    : direction > 0 ? start : candidates.length - 1 - start;
+  const ordered = Array.from({ length: candidates.length }, (_, offset) => {
+    const index = (normalizedStart + direction * offset + candidates.length) % candidates.length;
+    return candidates[index];
+  });
+  const original = current;
+  for (const decision of ordered) {
+    const { simulation, classification } = await evaluateNanikiruDecision(decision);
+    if (classification.isNanikiruMistake) {
+      const scene = await goToDecision(decision);
+      scene.nanikiruMistake = classification;
+      currentSimulation = simulation;
+      return scene;
+    }
+  }
+  if (original) await goToDecision(original);
+  throw new Error("該当する何切る悪手がありません。");
+}
+
+async function navigateExcludingNanikiru(kind, targets, current) {
+  const direction = kind.startsWith("previous") ? -1 : 1;
+  const possibleNanikiru = new Set(
+    prefilterNanikiruDecisions(targets).map(nanikiruPositionKey)
+  );
+  const filteredTargets = targets.filter((target) =>
+    !possibleNanikiru.has(nanikiruPositionKey(target)));
+  if (!filteredTargets.length) {
+    throw new Error("何切る悪手候補を除く該当局面がありません。");
+  }
+  const currentPosition = {
+    handCounter: Number(current?.handCounter ?? -1),
+    plyCounter: Number(current?.plyCounter ?? -1)
+  };
+  const sorted = [...filteredTargets].sort(comparePosition);
+  const start = direction > 0
+    ? sorted.findIndex((item) => comparePosition(item, currentPosition) > 0)
+    : [...sorted].reverse().findIndex((item) => comparePosition(item, currentPosition) < 0);
+  const normalizedStart = start < 0 ? 0 : direction > 0 ? start : sorted.length - 1 - start;
+  const ordered = Array.from({ length: sorted.length }, (_, offset) =>
+    sorted[(normalizedStart + direction * offset + sorted.length) % sorted.length]);
+  return goToDecision(ordered[0]);
+}
+
 async function navigate(kind) {
   const decisions = await loadDecisions();
   const current = currentScene?.sourcePosition || (await captureScene()).sourcePosition;
   const direction = kind.startsWith("previous") ? -1 : 1;
+  if (kind.endsWith("Nanikiru")) {
+    return navigateNanikiru(kind, decisions, current);
+  }
   let targets;
   if (kind === "previous" || kind === "next") {
     targets = decisions.filter((item) => /^[0-9][mpsz]$/.test(item.actual || ""));
@@ -251,6 +355,9 @@ async function navigate(kind) {
     throw new Error(`未対応の移動操作です: ${kind}`);
   }
   if (!targets.length) throw new Error("該当する局面がありません。");
+  if (kind.endsWith("Shin") || kind.endsWith("Major")) {
+    return navigateExcludingNanikiru(kind, targets, current);
+  }
   const currentPosition = {
     handCounter: Number(current?.handCounter ?? -1),
     plyCounter: Number(current?.plyCounter ?? -1)
@@ -292,7 +399,10 @@ function comparisonStatus(scene, simulation) {
 }
 
 async function ensureSimulation(scene) {
-  if (currentSimulation) return currentSimulation;
+  if (currentSimulation) {
+    scene.nanikiruMistake = classifyNanikiruMistake(scene, currentSimulation);
+    return currentSimulation;
+  }
   if (scene.judgmentType === "call") {
     currentSimulation = {
       withWall: { candidates: [], recommendation: null },
@@ -302,6 +412,7 @@ async function ensureSimulation(scene) {
     return currentSimulation;
   }
   currentSimulation = await simulator.analyze(scene, settings);
+  scene.nanikiruMistake = classifyNanikiruMistake(scene, currentSimulation);
   return currentSimulation;
 }
 
@@ -440,6 +551,20 @@ async function prepareCardImages() {
   }
 }
 
+async function prepareNanikiruReferenceImage() {
+  await ensureAdapter();
+  const restored = await executeAdapter(
+    "window.__bigcoachDesktop.restoreCapture({showMortal:true,showHands:false})"
+  );
+  if (!restored?.visualState?.aiAdviceVisible || !restored?.visualState?.opponentsHidden) {
+    throw new Error("何切る悪手カード用のBigCoach参考表示を準備できませんでした");
+  }
+  bigCoachView.webContents.invalidate();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const image = await bigCoachView.webContents.capturePage();
+  return image.toDataURL();
+}
+
 function cardVisualStateMatches(mode, state) {
   return mode === "front"
     ? !state.aiBarsVisible && !state.aiAdviceVisible && state.opponentsHidden
@@ -540,6 +665,215 @@ function cardHtml(scene, simulation, memo, images, mediaMode = "preview") {
   return { front, back, comparison };
 }
 
+function tileRowHtml(codes, mediaMode = "preview", height = 54) {
+  return `<div style="display:flex;flex-wrap:wrap;gap:2px;align-items:flex-end">${
+    (codes || []).map((code) => tileHtml(code, mediaMode).replace("height:38px", `height:${height}px`)).join("")
+  }</div>`;
+}
+
+function tileStripSvg(codes) {
+  const tiles = codes || [];
+  const tileWidth = 66;
+  const tileHeight = 90;
+  const images = tiles.map((code, index) => {
+    const filename = tileFilename(code);
+    const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
+    return `<image x="${index * tileWidth}" y="0" width="${tileWidth}" height="${tileHeight}" href="data:image/png;base64,${data}"/>`;
+  }).join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${tileWidth * tiles.length}" height="${tileHeight}" viewBox="0 0 ${tileWidth * tiles.length} ${tileHeight}">${images}</svg>`;
+}
+
+function tileStripAsset(codes, sceneId, mediaMode = "preview") {
+  const svg = tileStripSvg(codes);
+  const data = Buffer.from(svg, "utf8").toString("base64");
+  const filename = `bigcoach_hand_${sceneId}.svg`;
+  return {
+    filename,
+    data,
+    src: mediaMode === "anki" ? filename : `data:image/svg+xml;base64,${data}`
+  };
+}
+
+function nanikiruMistakeCardHtml(scene, simulation, screenshot, mediaMode = "preview", handStripSrc = null) {
+  const classification = classifyNanikiruMistake(scene, simulation);
+  const handImage = handStripSrc || tileStripAsset(scene.handTiles, scene.sceneId, mediaMode).src;
+  const structured = {
+    schema: "bigcoach-nanikiru-mistake/v1",
+    sceneId: scene.sceneId,
+    sourceUrl: scene.url,
+    handMpsz: scene.handMpsz,
+    handTiles: scene.handTiles,
+    selfCallMpsz: codesToMpsz(scene.selfCallTiles),
+    selfCallTiles: scene.selfCallTiles,
+    doraIndicatorsMpsz: codesToMpsz(scene.doraTiles),
+    doraIndicators: scene.doraTiles,
+    turn: scene.currentTurn,
+    opponentRiichi: scene.opponentRiichi,
+    opponentCallTiles: scene.opponentCallTiles,
+    roundWind: scene.roundWind,
+    seatWind: scene.seatWind,
+    roundText: scene.roundText,
+    actualDiscard: scene.actualDiscard,
+    recommendedDiscard: scene.recommendedDiscard,
+    simulatorWithRiverAdjustment: simulation.withWall.recommendation,
+    simulatorWithoutRiverAdjustment: simulation.withoutWall.recommendation,
+    simulatorWithoutRiverAdjustmentCandidates: simulation.withoutWall.candidates,
+    shanten: scene.shanten
+  };
+  const dataJson = JSON.stringify(structured);
+  const commonData = `data-schema="bigcoach-nanikiru-mistake-v1" data-scene-id="${escapeHtml(scene.sceneId)}" data-hand-mpsz="${escapeHtml(scene.handMpsz)}"`;
+  const front = `
+    <div class="nanikiru-flat-card" ${commonData}>
+      <h2 style="text-align:center">何切る？</h2>
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:8px;margin-bottom:12px">
+        <div><small>場風</small>${tileRowHtml([scene.roundWind], mediaMode, 42)}</div>
+        <div><small>自風</small>${tileRowHtml([scene.seatWind], mediaMode, 42)}</div>
+        <div><small>巡目</small><strong style="display:block;font-size:24px">${scene.currentTurn}巡目</strong></div>
+        <div><small>ドラ表示牌</small>${tileRowHtml(scene.doraTiles, mediaMode, 42)}</div>
+      </div>
+      <img src="${escapeHtml(handImage)}" alt="${escapeHtml(scene.handMpsz)}" data-hand-mpsz="${escapeHtml(scene.handMpsz)}"
+        style="display:block;width:auto;max-width:100%;height:auto;white-space:nowrap">
+      ${scene.selfCallTiles?.length ? `<div style="margin-top:8px"><small>副露</small>${tileRowHtml(scene.selfCallTiles, mediaMode, 46)}</div>` : ""}
+    </div>`;
+  const back = `
+    <div class="nanikiru-flat-card" ${commonData}>
+      <h2>正解: ${tileHtml(scene.recommendedDiscard, mediaMode)}</h2>
+      <p>実打: ${tileHtml(scene.actualDiscard, mediaMode)} ／ AI: ${tileHtml(scene.recommendedDiscard, mediaMode)}
+      ／ 河補正あり: ${tileHtml(simulation.withWall.recommendation, mediaMode)}
+      ／ 河補正なし: ${tileHtml(simulation.withoutWall.recommendation, mediaMode)}</p>
+      <p>手牌mpsz: <code>${escapeHtml(scene.handMpsz)}</code></p>
+      <p>副露mpsz: <code>${escapeHtml(codesToMpsz(scene.selfCallTiles))}</code></p>
+      <p>ドラ表示牌mpsz: <code>${escapeHtml(codesToMpsz(scene.doraTiles))}</code></p>
+      <p>${escapeHtml(scene.roundText)} ／ ${scene.currentTurn}巡目 ／ 場風${escapeHtml(scene.roundWind)} ／ 自風${escapeHtml(scene.seatWind)}
+      ／ ${escapeHtml(String(scene.shanten))}シャンテン</p>
+      ${candidateTable(
+        "補正無の何切る結果（河・副露を残り枚数へ反映しない）",
+        simulation.withoutWall,
+        mediaMode
+      )}
+      <details><summary>加工用JSON</summary><pre data-format="bigcoach-nanikiru-mistake-v1">${escapeHtml(dataJson)}</pre></details>
+      <h3>BigCoach参考画像</h3>
+      <img src="${escapeHtml(screenshot)}" style="max-width:100%">
+      <p><a href="${escapeHtml(scene.url)}">BigCoach解析結果</a> ／ 局面ID: ${escapeHtml(scene.sceneId)}</p>
+      <p>${escapeHtml(classification.reason)}</p>
+    </div>`;
+  return { front, back, structured, classification };
+}
+
+async function storeTileMediaForNanikiru(scene, simulation) {
+  const codes = new Set([
+    ...scene.handTiles,
+    ...scene.selfCallTiles,
+    ...scene.doraTiles,
+    scene.roundWind,
+    scene.seatWind,
+    scene.actualDiscard,
+    scene.recommendedDiscard,
+    simulation?.withWall?.recommendation,
+    simulation?.withoutWall?.recommendation,
+    ...(simulation?.withoutWall?.candidates || []).flatMap((candidate) => [
+      candidate.tile,
+      ...(candidate.ukeire || []).map((item) => item.tile)
+    ])
+  ].filter((code) => tileFilename(code)));
+  for (const code of codes) {
+    const filename = tileFilename(code);
+    const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
+    await anki.storeMedia(`bigcoach_tile_${filename}`, data);
+  }
+}
+
+async function registerNanikiruMistakeCard(scene, simulation, screenshotDataUrl, duplicateMode = "skip") {
+  await storeTileMediaForNanikiru(scene, simulation);
+  const screenshotName = await anki.storeImage(screenshotDataUrl, scene.sceneId, "nanikiru");
+  const handStrip = tileStripAsset(scene.handTiles, scene.sceneId, "anki");
+  await anki.storeMedia(handStrip.filename, handStrip.data);
+  const flat = nanikiruMistakeCardHtml(
+    scene,
+    simulation,
+    screenshotName,
+    "anki",
+    handStrip.src
+  );
+  const dedicatedSettings = {
+    ...settings,
+    deckName: settings.nanikiruMistakeDeckName || `${settings.deckName}::何切る悪手`
+  };
+  const registration = await anki.add({
+    settings: dedicatedSettings,
+    scene,
+    frontHtml: flat.front,
+    backHtml: flat.back,
+    duplicateMode,
+    duplicatePrefix: "BigCoach_NanikiruMistake_ID",
+    extraTags: ["何切る悪手", "BigCoach_何切る悪手"]
+  });
+  return { registration, deckName: dedicatedSettings.deckName, flat };
+}
+
+async function bulkRegisterNanikiruMistakes() {
+  const decisions = prefilterNanikiruDecisions(await loadDecisions()).sort(comparePosition);
+  const original = currentScene?.sourcePosition || (await captureScene()).sourcePosition;
+  const summary = {
+    candidates: decisions.length,
+    qualified: 0,
+    added: 0,
+    updated: 0,
+    skipped: 0,
+    failed: []
+  };
+  try {
+    for (let index = 0; index < decisions.length; index += 1) {
+      const decision = decisions[index];
+      mainWindow?.webContents.send("nanikiru:bulk-progress", {
+        current: index + 1,
+        total: decisions.length,
+        roundText: decision.roundText,
+        turn: decision.turn
+      });
+      try {
+        const evaluated = await evaluateNanikiruDecision(decision);
+        if (!evaluated.classification.isNanikiruMistake) continue;
+        summary.qualified += 1;
+        const duplicates = await anki.findDuplicates(
+          evaluated.scene.sceneId,
+          "BigCoach_NanikiruMistake_ID"
+        );
+        if (duplicates.length) {
+          summary.skipped += 1;
+          continue;
+        }
+        const scene = await goToDecision(decision);
+        scene.nanikiruMistake = evaluated.classification;
+        const screenshot = await prepareNanikiruReferenceImage();
+        const result = await registerNanikiruMistakeCard(
+          scene,
+          evaluated.simulation,
+          screenshot,
+          "skip"
+        );
+        if (result.registration.updated) summary.updated += 1;
+        else if (result.registration.skipped) summary.skipped += 1;
+        else summary.added += 1;
+      } catch (error) {
+        summary.failed.push({
+          roundText: decision.roundText,
+          turn: decision.turn,
+          message: error.message
+        });
+        log(`nanikiru bulk registration failed at ${nanikiruPositionKey(decision)}: ${error.stack || error}`);
+      }
+    }
+  } finally {
+    if (original) await goToDecision(original).catch(() => {});
+    mainWindow?.webContents.send("nanikiru:bulk-progress", {
+      complete: true,
+      ...summary
+    });
+  }
+  return summary;
+}
+
 async function refreshStats() {
   const decisions = await loadDecisions();
   const sourceUrl = bigCoachView.webContents.getURL();
@@ -628,6 +962,7 @@ function registerIpc() {
     currentSimulation = null;
     currentCardImages = null;
     currentDecisions = [];
+    currentNanikiruMistakes = null;
     await bigCoachView.webContents.loadURL(url);
     const history = saveReviewHistory(url);
     return { url, history };
@@ -640,16 +975,30 @@ function registerIpc() {
   ipcMain.handle("simulator:run", async () => {
     const scene = currentScene || await captureScene();
     currentSimulation = await ensureSimulation(scene);
-    return { simulation: currentSimulation, comparison: comparisonStatus(scene, currentSimulation) };
+    return {
+      simulation: currentSimulation,
+      comparison: comparisonStatus(scene, currentSimulation),
+      nanikiruMistake: scene.nanikiruMistake
+    };
   });
   ipcMain.handle("settings:save", (_event, next) => saveSettings(next));
   ipcMain.handle("app:diagnose", () => diagnose());
   ipcMain.handle("stats:refresh", () => refreshStats());
+  ipcMain.handle("anki:bulk-register-nanikiru", () => bulkRegisterNanikiruMistakes());
   ipcMain.handle("anki:preview", async (_event, memo) => {
     const scene = currentScene || await captureScene();
     await ensureSimulation(scene);
     const images = currentCardImages || await prepareCardImages();
-    const duplicates = await anki.findDuplicates(scene.sceneId).catch(() => []);
+    const nanikiruMistake = classifyNanikiruMistake(scene, currentSimulation);
+    const duplicates = await anki.findDuplicates(
+      scene.sceneId,
+      nanikiruMistake.isNanikiruMistake
+        ? "BigCoach_NanikiruMistake_ID"
+        : "BigCoach_ID"
+    ).catch(() => []);
+    const nanikiruMistakeCard = nanikiruMistake.isNanikiruMistake
+      ? nanikiruMistakeCardHtml(scene, currentSimulation, images.backDataUrl)
+      : null;
     return {
       ...cardHtml(scene, currentSimulation, memo, {
         front: images.frontDataUrl,
@@ -659,6 +1008,8 @@ function registerIpc() {
       duplicates,
       simulation: currentSimulation,
       comparison: comparisonStatus(scene, currentSimulation),
+      nanikiruMistake,
+      nanikiruMistakeCard,
       captureDiagnostics: images.captureDiagnostics
     };
   });
@@ -666,6 +1017,28 @@ function registerIpc() {
     const scene = currentScene || await captureScene();
     await ensureSimulation(scene);
     const images = currentCardImages || await prepareCardImages();
+    const classification = classifyNanikiruMistake(scene, currentSimulation);
+    if (classification.isNanikiruMistake) {
+      try {
+        const dedicated = await registerNanikiruMistakeCard(
+          scene,
+          currentSimulation,
+          images.backDataUrl,
+          payload.duplicateMode || "skip"
+        );
+        return {
+          ...dedicated.registration,
+          nanikiruMistake: {
+            qualified: true,
+            classification,
+            deckName: dedicated.deckName,
+            registration: dedicated.registration
+          }
+        };
+      } catch (error) {
+        throw new Error(`何切る悪手カードを登録できませんでした。${error.message}`);
+      }
+    }
     let frontName;
     let backName;
     try {
@@ -678,6 +1051,11 @@ function registerIpc() {
       scene.actualDiscard,
       scene.recommendedDiscard,
       currentSimulation?.withWall?.recommendation,
+      currentSimulation?.withoutWall?.recommendation,
+      ...scene.handTiles,
+      ...scene.doraTiles,
+      scene.roundWind,
+      scene.seatWind,
       ...[currentSimulation?.withWall, currentSimulation?.withoutWall].flatMap((analysis) =>
         (analysis?.candidates || []).flatMap((candidate) =>
           [candidate.tile, ...(candidate.ukeire || []).map((item) => item.tile)]))
@@ -691,19 +1069,23 @@ function registerIpc() {
     } catch (error) {
       throw new Error(`Ankiへ牌画像を送信できませんでした。${error.message}`);
     }
-    const html = cardHtml(scene, currentSimulation, payload.memo || "", {
-      front: frontName,
-      back: backName,
-      outcomes: images.outcomes
-    }, "anki");
     try {
-      return await anki.add({
+      const html = cardHtml(scene, currentSimulation, payload.memo || "", {
+        front: frontName,
+        back: backName,
+        outcomes: images.outcomes
+      }, "anki");
+      const normalRegistration = await anki.add({
         settings,
         scene,
         frontHtml: html.front,
         backHtml: html.back,
         duplicateMode: payload.duplicateMode || "skip"
       });
+      return {
+        ...normalRegistration,
+        nanikiruMistake: { qualified: false, classification }
+      };
     } catch (error) {
       throw new Error(`Ankiカード本体を登録できませんでした。${error.message}`);
     }
@@ -775,6 +1157,7 @@ async function createWindow() {
       if (url.includes("/review/")) await ensureAdapter();
       if (url !== loadedReviewUrl) {
         currentDecisions = [];
+        currentNanikiruMistakes = null;
         currentScene = null;
         currentSimulation = null;
         currentCardImages = null;

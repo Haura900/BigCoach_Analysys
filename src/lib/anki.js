@@ -55,12 +55,12 @@ class AnkiService {
     };
   }
 
-  duplicateTag(sceneId) {
-    return `BigCoach_ID_${sceneId}`;
+  duplicateTag(sceneId, prefix = "BigCoach_ID") {
+    return `${prefix}_${sceneId}`;
   }
 
-  async findDuplicates(sceneId) {
-    return this.invoke("findNotes", { query: `tag:${this.duplicateTag(sceneId)}` });
+  async findDuplicates(sceneId, prefix = "BigCoach_ID") {
+    return this.invoke("findNotes", { query: `tag:${this.duplicateTag(sceneId, prefix)}` });
   }
 
   async storeImage(dataUrl, sceneId, suffix = "") {
@@ -83,8 +83,16 @@ class AnkiService {
     return { [names[0]]: frontHtml, [names[1]]: backHtml };
   }
 
-  async add({ settings, scene, frontHtml, backHtml, duplicateMode }) {
-    const duplicates = await this.findDuplicates(scene.sceneId);
+  async add({
+    settings,
+    scene,
+    frontHtml,
+    backHtml,
+    duplicateMode,
+    duplicatePrefix = "BigCoach_ID",
+    extraTags = []
+  }) {
+    const duplicates = await this.findDuplicates(scene.sceneId, duplicatePrefix);
     if (duplicates.length && duplicateMode === "skip") return { skipped: true, duplicateIds: duplicates };
     const [decks, models] = await Promise.all([this.invoke("deckNames"), this.invoke("modelNames")]);
     if (!decks.includes(settings.deckName)) {
@@ -104,7 +112,12 @@ class AnkiService {
       });
     }
     const fields = await this.fieldsFor(settings, frontHtml, backHtml);
-    const baseTags = [...new Set([...(settings.tags || []), this.duplicateTag(scene.sceneId), "BigCoach"])];
+    const baseTags = [...new Set([
+      ...(settings.tags || []),
+      ...extraTags,
+      this.duplicateTag(scene.sceneId, duplicatePrefix),
+      "BigCoach"
+    ])];
     if (duplicates.length && duplicateMode === "overwrite") {
       const note = { id: duplicates[0], fields };
       await this.invoke("updateNoteFields", { note });

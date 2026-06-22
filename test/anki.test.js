@@ -53,3 +53,34 @@ test("AnkiConnectタイムアウトを未接続と誤表示しない", async () 
     await close(server);
   }
 });
+
+test("何切る悪手カードは通常カードと別の重複キーを使う", async () => {
+  const service = new AnkiService({ log: () => {} });
+  const queries = [];
+  service.invoke = async (action, params) => {
+    if (action === "findNotes") {
+      queries.push(params.query);
+      return [];
+    }
+    if (action === "deckNames") return ["BigCoach", "BigCoach::何切る悪手"];
+    if (action === "modelNames") return ["基本"];
+    if (action === "modelFieldNames") return ["表面", "裏面"];
+    if (action === "addNote") return 123;
+    return true;
+  };
+  const settings = {
+    deckName: "BigCoach::何切る悪手",
+    modelName: "基本",
+    tags: []
+  };
+  await service.add({
+    settings,
+    scene: { sceneId: "scene1" },
+    frontHtml: "front",
+    backHtml: "back",
+    duplicateMode: "skip",
+    duplicatePrefix: "BigCoach_NanikiruMistake_ID",
+    extraTags: ["何切る悪手"]
+  });
+  assert.deepEqual(queries, ["tag:BigCoach_NanikiruMistake_ID_scene1"]);
+});
