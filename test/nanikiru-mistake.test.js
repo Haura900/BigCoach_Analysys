@@ -37,22 +37,43 @@ test("高速な事前条件を順番に判定する", () => {
   assert.equal(precheckNanikiruMistake({ ...baseScene, actualDiscard: "3p" }).stage, "mistake");
   assert.equal(precheckNanikiruMistake({ ...baseScene, opponentRiichi: true }).stage, "opponent-riichi");
   assert.equal(precheckNanikiruMistake({ ...baseScene, opponentCallTiles: ["1z", "1z", "1z"] }).stage, "opponent-call");
-  assert.equal(precheckNanikiruMistake({ ...baseScene, currentTurn: 7 }).stage, "turn");
   assert.equal(precheckNanikiruMistake({ ...baseScene, handTiles: [...baseScene.handTiles.slice(0, -2), "7z", "2z"] }).stage, "unnecessary");
   assert.equal(precheckNanikiruMistake({ ...baseScene, shanten: 3 }).stage, "shanten");
   assert.equal(precheckNanikiruMistake(baseScene).stage, "simulation");
 });
 
-test("解析全体はシミュレーター前に打牌ミス・他家リーチなし・6巡目以内・2シャンテン以下で絞る", () => {
+test("不要牌が1枚だけでAI推奨打牌なら対象に含める", () => {
+  const oneUnnecessary = {
+    ...baseScene,
+    handTiles: ["1m", "2m", "3m", "4m", "5m", "6m", "2p", "3p", "4p", "5s", "6s", "7s", "2z", "7z"],
+    recommendedDiscard: "7z"
+  };
+  const allowed = precheckNanikiruMistake(oneUnnecessary);
+  assert.equal(allowed.stage, "simulation");
+  assert.equal(allowed.recommendedIsOnlyUnnecessary, true);
+  assert.deepEqual(allowed.unnecessaryTiles, ["7z"]);
+
+  assert.equal(precheckNanikiruMistake({
+    ...oneUnnecessary,
+    recommendedDiscard: "3p"
+  }).stage, "unnecessary");
+
+  assert.equal(precheckNanikiruMistake({
+    ...oneUnnecessary,
+    handTiles: [...oneUnnecessary.handTiles.slice(0, -2), "1z", "7z"]
+  }).stage, "unnecessary");
+});
+
+test("解析全体はシミュレーター前に打牌ミス・他家リーチなし・2シャンテン以下で絞る", () => {
   const decisions = [
     { isBad: true, judgmentType: "discard", shanten: 2, turn: 6, opponentRiichi: false, id: "target" },
     { isBad: false, judgmentType: "discard", shanten: 2, turn: 6, opponentRiichi: false, id: "correct" },
     { isBad: true, judgmentType: "call", shanten: 2, turn: 6, opponentRiichi: false, id: "call" },
     { isBad: true, judgmentType: "discard", shanten: 3, turn: 6, opponentRiichi: false, id: "far" },
-    { isBad: true, judgmentType: "discard", shanten: 2, turn: 7, opponentRiichi: false, id: "late" },
+    { isBad: true, judgmentType: "discard", shanten: 2, turn: 18, opponentRiichi: false, id: "late" },
     { isBad: true, judgmentType: "discard", shanten: 2, turn: 6, opponentRiichi: true, id: "riichi" }
   ];
-  assert.deepEqual(prefilterNanikiruDecisions(decisions).map((item) => item.id), ["target"]);
+  assert.deepEqual(prefilterNanikiruDecisions(decisions).map((item) => item.id), ["target", "late"]);
 });
 
 test("AIと河補正あり・なしの推奨が一致したときだけ何切る悪手", () => {

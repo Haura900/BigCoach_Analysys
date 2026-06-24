@@ -165,7 +165,7 @@ async function main() {
     throw new Error("Card back is not in answer mode with AI bars and opponent hands shown");
   }
   if (!preview.nanikiruMistake ||
-      !["complete", "judgment", "mistake", "opponent-riichi", "opponent-call", "turn", "unnecessary", "shanten"]
+      !["complete", "judgment", "mistake", "opponent-riichi", "opponent-call", "unnecessary", "shanten"]
         .includes(preview.nanikiruMistake.stage)) {
     throw new Error("Nanikiru mistake staged classification was not returned");
   }

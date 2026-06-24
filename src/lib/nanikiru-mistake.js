@@ -64,18 +64,11 @@ function precheckNanikiruMistake(scene) {
       unnecessaryTiles: []
     };
   }
-  if (!Number.isFinite(Number(scene.currentTurn)) || Number(scene.currentTurn) > 6) {
-    return {
-      eligible: false,
-      stage: "turn",
-      reason: Number.isFinite(Number(scene.currentTurn))
-        ? `${scene.currentTurn}巡目のため対象外です`
-        : "巡目を取得できません",
-      unnecessaryTiles: []
-    };
-  }
   const unnecessaryTiles = findUnnecessaryTiles(scene.handTiles, scene.doraTiles);
-  if (unnecessaryTiles.length) {
+  const recommendedIsOnlyUnnecessary = unnecessaryTiles.length === 1 &&
+    scene.recommendedDiscard &&
+    normalizedTile(scene.recommendedDiscard) === unnecessaryTiles[0];
+  if (unnecessaryTiles.length && !recommendedIsOnlyUnnecessary) {
     return {
       eligible: false,
       stage: "unnecessary",
@@ -96,8 +89,11 @@ function precheckNanikiruMistake(scene) {
   return {
     eligible: true,
     stage: "simulation",
-    reason: "事前条件を通過しました",
-    unnecessaryTiles: []
+    reason: recommendedIsOnlyUnnecessary
+      ? `唯一の不要牌${unnecessaryTiles[0]}がAI推奨打牌のため対象です`
+      : "事前条件を通過しました",
+    unnecessaryTiles,
+    recommendedIsOnlyUnnecessary
   };
 }
 
@@ -106,8 +102,6 @@ function prefilterNanikiruDecisions(decisions) {
     decision.isBad &&
     decision.judgmentType === "discard" &&
     !decision.opponentRiichi &&
-    Number.isFinite(Number(decision.turn)) &&
-    Number(decision.turn) <= 6 &&
     Number.isFinite(Number(decision.shanten)) &&
     Number(decision.shanten) <= 2
   );
