@@ -7,7 +7,7 @@ const { normalizeScene, validateScene } = require("./lib/scene");
 const { SimulatorService } = require("./lib/simulator");
 const { AnkiService } = require("./lib/anki");
 const { AuthSessionStore } = require("./lib/auth-session");
-const { codesToMpsz } = require("./lib/tiles");
+const { codesToMpsz, tileFilename } = require("./lib/tiles");
 const {
   classifyShinMistake,
   classifyMajorMistake,
@@ -420,15 +420,6 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   })[character]);
-}
-
-function tileFilename(code) {
-  if (!code) return null;
-  if (code === "0p") return "aka1-66-90-s.png";
-  if (code === "0s") return "aka2-66-90-s.png";
-  if (code === "0m") return "aka3-66-90-s.png";
-  const suit = { m: "man", p: "pin", s: "sou", z: "ji" }[code[1]];
-  return suit ? `${suit}${code[0]}-66-90-s.png` : null;
 }
 
 function tileImagesDirectory() {

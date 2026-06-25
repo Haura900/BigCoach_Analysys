@@ -62,6 +62,7 @@ function escapeHtml(value) {
 
 function renderScene(scene) {
   state.scene = scene;
+  $("#copy-hand-mpsz").disabled = !scene?.handMpsz;
   $("#scene-title").textContent = `${scene.roundText || "局情報不明"} / ${scene.currentTurn || "?"}巡目 / ${scene.actorText || "手番不明"}`;
   const chips = [
     `手牌 ${scene.handMpsz || "取得なし"}`,
@@ -280,6 +281,20 @@ $("#refresh-scene").addEventListener("click", () => action("局面を取得中..
   renderStats(await window.bigcoachApp.refreshStats());
   toast("局面を取得しました");
 }));
+
+$("#copy-hand-mpsz").addEventListener("click", async () => {
+  const handMpsz = state.scene?.handMpsz;
+  if (!handMpsz) {
+    toast("手牌mpszを取得できる局面を先に読み込んでください", true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(handMpsz);
+    toast(`手牌mpszをコピーしました: ${handMpsz}`);
+  } catch (error) {
+    toast(error.message || "クリップボードへコピーできませんでした", true);
+  }
+});
 
 $$("[data-nav]").forEach((button) => button.addEventListener("click", () =>
   action(`${button.textContent}へ移動中...`, async () => {

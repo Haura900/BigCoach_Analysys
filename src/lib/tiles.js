@@ -8,6 +8,15 @@ const TILE_INDEX_TO_CODE = [
   "0m", "0p", "0s"
 ];
 const TILE_CODE_TO_INDEX = Object.fromEntries(TILE_INDEX_TO_CODE.map((code, index) => [code, index]));
+const HONOR_TILE_FILENAMES = {
+  1: "ji1-66-90-s.png",
+  2: "ji2-66-90-s.png",
+  3: "ji3-66-90-s.png",
+  4: "ji4-66-90-s.png",
+  5: "ji6-66-90-s.png",
+  6: "ji5-66-90-s.png",
+  7: "ji7-66-90-s.png"
+};
 
 function normalizeTileCode(value) {
   if (typeof value === "number" && TILE_INDEX_TO_CODE[value]) return TILE_INDEX_TO_CODE[value];
@@ -73,6 +82,17 @@ function wallCounts(codes) {
   return counts;
 }
 
+function tileFilename(code) {
+  if (!code) return null;
+  if (code === "0p") return "aka1-66-90-s.png";
+  if (code === "0s") return "aka2-66-90-s.png";
+  if (code === "0m") return "aka3-66-90-s.png";
+  const normalized = normalizeTileCode(code);
+  if (normalized[1] === "z") return HONOR_TILE_FILENAMES[Number(normalized[0])] || null;
+  const suit = { m: "man", p: "pin", s: "sou" }[normalized[1]];
+  return suit ? `${suit}${normalized[0]}-66-90-s.png` : null;
+}
+
 function inferMeldType(tiles) {
   const normalized = tiles.map(normalizeForCount);
   if (new Set(normalized).size === 1) return normalized.length === 4 ? 3 : 0;
@@ -109,5 +129,6 @@ module.exports = {
   createFullWall,
   removeKnownTiles,
   wallCounts,
-  buildMelds
+  buildMelds,
+  tileFilename
 };
