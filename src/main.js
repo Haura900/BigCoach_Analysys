@@ -345,7 +345,7 @@ async function navigateExcludingNanikiru(kind, targets, current) {
 }
 
 async function navigate(kind) {
-  if (kind.endsWith("Lance")) {
+  if (kind.endsWith("Lance") || kind.endsWith("Mistake")) {
     await ensureAdapter();
     const result = await executeAdapter(
       `window.__bigcoachDesktop.navigate(${JSON.stringify(kind)})`

@@ -681,6 +681,10 @@
     return (Number(left.kyokuIndex) - Number(right.kyokuIndex)) || (Number(left.entryIndex) - Number(right.entryIndex));
   }
 
+  function modernPositionKey(item) {
+    return `${Number(item?.kyokuIndex ?? -1)}:${Number(item?.entryIndex ?? -1)}`;
+  }
+
   function modernLanceMisfire(decision, threshold = 0.05) {
     return decision?.judgmentType === "discard" &&
       Number.isFinite(Number(decision?.lanceProbability)) &&
@@ -734,7 +738,7 @@
       const entries = flattenModernEntries(review.data);
       const current = modernCurrentEntry(entries);
       if (kind === "previousLance" || kind === "nextLance") {
-        const stepLabel = kind === "previousLance" ? "\u524d\u306e\u624b\u756a" : "\u6b21\u306e\u624b\u756a";
+        const stepLabel = kind === "previousLance" ? "\u524d\u306e\u30df\u30b9" : "\u6b21\u306e\u30df\u30b9";
         for (let attempt = 0; attempt < Math.max(200, entries.length * 2); attempt += 1) {
           const result = await clickModernButton(stepLabel);
           if (!result.ok) return result;
@@ -767,14 +771,28 @@
       const matches = entries.filter(predicate).sort((left, right) => (left.kyokuIndex - right.kyokuIndex) || (left.entryIndex - right.entryIndex));
       if (!matches.length) return { ok: false, reason: `${kind} に該当する局面がありません` };
       const direction = kind.startsWith("previous") ? -1 : 1;
-      let target = null;
-      if (current) {
-        target = direction > 0
+      let target = current
+        ? (direction > 0
           ? matches.find((item) => modernComparePosition(item, current) > 0)
-          : [...matches].reverse().find((item) => modernComparePosition(item, current) < 0);
-      }
+          : [...matches].reverse().find((item) => modernComparePosition(item, current) < 0))
+        : null;
       target = target || (direction > 0 ? matches[0] : matches.at(-1));
-      return goToPosition(target.handCounter, target.plyCounter);
+      const targetKey = modernPositionKey(target);
+      const currentKey = modernPositionKey(current);
+      if (currentKey === targetKey) return { ok: true };
+
+      const buttonLabel = kind.startsWith("previous") ? "\u524d\u306e\u30df\u30b9" : "\u6b21\u306e\u30df\u30b9";
+      const safetyLimit = Math.max(8, matches.length + 3);
+      for (let attempt = 0; attempt < safetyLimit; attempt += 1) {
+        const result = await clickModernButton(buttonLabel);
+        if (!result.ok) return result;
+        const refreshed = modernCurrentEntry(entries);
+        if (refreshed && modernPositionKey(refreshed) === targetKey) return { ok: true };
+        if (refreshed && modernPositionKey(refreshed) === currentKey && attempt > 0) break;
+      }
+      const refreshed = modernCurrentEntry(entries);
+      if (refreshed && modernPositionKey(refreshed) === targetKey) return { ok: true };
+      return { ok: false, reason: "BigCoach譁ｰUI繝溘せ遘ｻ蜍輔ｒ襍､縺上※繝・ゃ繝ｼ繧ｿ縺ｸ遘ｻ蜍輔〒縺阪∪縺帙ｓ縺ｧ縺励◆" };
     }
     const controls = { previousMistake: "#prev-mismatch", nextMistake: "#next-mismatch" };
     if (kind === "previous" || kind === "next") {
