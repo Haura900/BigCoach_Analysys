@@ -1,5 +1,6 @@
 (() => {
   const TILE_PATTERN = /\/Regular_shortnames\/([^/"']+)\.svg/i;
+  const MODERN_TILE_PATTERN = /\/mahjongfiles\/([^/"']+)\.png/i;
   const HONORS = { E: "1z", S: "2z", W: "3z", N: "4z", P: "5z", F: "6z", C: "7z" };
   const TENHOU_TILES = {
     11: "1m", 12: "2m", 13: "3m", 14: "4m", 15: "5m", 16: "6m", 17: "7m", 18: "8m", 19: "9m",
@@ -8,6 +9,9 @@
     41: "1z", 42: "2z", 43: "3z", 44: "4z", 45: "5z", 46: "6z", 47: "7z",
     51: "0m", 52: "0p", 53: "0s"
   };
+  let currentModernReviewData = null;
+  let modernCaptureStyle = null;
+  let modernCaptureMode = null;
 
   function analysisFrame() {
     return document.querySelector(
@@ -55,9 +59,49 @@
     return /^[0-9][mpsz]$/.test(value) ? value : null;
   }
 
+  function tileIndex(code) {
+    const normalized = normalizeTile(code);
+    if (!normalized) return null;
+    if (normalized[0] === "0") return { m: 34, p: 35, s: 36 }[normalized[1]];
+    const suitBase = { m: 0, p: 9, s: 18, z: 27 }[normalized[1]];
+    return suitBase == null ? null : suitBase + Number(normalized[0]) - 1;
+  }
+
+  function normalizeForMeld(code) {
+    const tile = normalizeTile(code);
+    return tile?.[0] === "0" ? `5${tile[1]}` : tile;
+  }
+
+  function inferMeldType(tiles) {
+    const normalized = tiles.map(normalizeForMeld).filter(Boolean);
+    if (new Set(normalized).size === 1) return normalized.length === 4 ? 3 : 0;
+    const suits = new Set(normalized.map((code) => code[1]));
+    const numbers = normalized.map((code) => Number(code[0])).sort((a, b) => a - b);
+    if (normalized.length === 3 && suits.size === 1 && !suits.has("z") &&
+        numbers[1] === numbers[0] + 1 && numbers[2] === numbers[1] + 1) return 1;
+    return 0;
+  }
+
+  function buildMelds(callTiles) {
+    const source = [...(callTiles || [])].map(normalizeTile).filter(Boolean);
+    const melds = [];
+    for (let index = 0; index < source.length;) {
+      const remaining = source.length - index;
+      let size = 3;
+      const four = source.slice(index, index + 4);
+      if (remaining >= 4 && new Set(four.map(normalizeForMeld)).size === 1 && (remaining - 4) % 3 === 0) size = 4;
+      const tiles = source.slice(index, index + size);
+      if (tiles.length < 3) break;
+      melds.push({ type: inferMeldType(tiles), tiles: tiles.map(tileIndex).filter((item) => item != null) });
+      index += size;
+    }
+    return melds;
+  }
+
   function tileFromImage(image) {
-    const match = String(image.currentSrc || image.src || "").match(TILE_PATTERN);
-    const code = match?.[1] || "";
+    const source = String(image.currentSrc || image.src || "");
+    const match = source.match(TILE_PATTERN) || source.match(MODERN_TILE_PATTERN);
+    const code = match?.[1] || image.alt || "";
     if (["back", "Blank"].includes(code)) return null;
     return normalizeTile(code);
   }
@@ -103,6 +147,225 @@
     return { kyoku: windBase + number - 1, honba: honbaMatch ? Number(honbaMatch[1]) : 0 };
   }
 
+  function reviewTaskId() {
+    const match = String(location.pathname || "").match(/\/review\/([^/?#]+)/);
+    return match?.[1] || null;
+  }
+
+  function isModernReviewPage() {
+    return !window.MM?.GS && Boolean(reviewTaskId());
+  }
+
+  function parseGameInfo(entry) {
+    try {
+      return JSON.parse(entry?.game_info || "{}");
+    } catch {
+      return {};
+    }
+  }
+
+  function modernRoundLabel(gameInfo) {
+    const round = gameInfo?.game_info?.round || {};
+    const bakaze = { east: "東", south: "南", west: "西", north: "北" }[gameInfo?.game_info?.bakaze] || "東";
+    return `${bakaze}${Number(round.round || 1)}局`;
+  }
+
+  function modernSeatLabel(gameInfo) {
+    return { east: "東", south: "南", west: "西", north: "北" }[gameInfo?.game_info?.seat] || "東";
+  }
+
+  function modernOpenSetTiles(openSet) {
+    if (!openSet) return [];
+    if (Array.isArray(openSet.tiles)) return openSet.tiles.map(normalizeTile).filter(Boolean);
+    if (Array.isArray(openSet.consumed) && openSet.pai) {
+      return [openSet.pai, ...openSet.consumed].map(normalizeTile).filter(Boolean);
+    }
+    return [];
+  }
+
+  function modernDecisionProbability(entry, action) {
+    const actual = (entry?.details || []).find((item) => actionEquals(item.action, action));
+    return actual?.prob == null ? null : Number(actual.prob);
+  }
+
+  function modernLanceData(entry) {
+    const lance = (entry?.alt_engines || []).find((item) => /lance/i.test(String(item?.name || item?.model_tag || "")));
+    if (!lance) return null;
+    return {
+      expected: lance.expected || null,
+      isEqual: Boolean(lance.is_equal),
+      details: (lance.details || []).map((item) => ({
+        action: item.action || null,
+        prob: item.prob == null ? null : Number(item.prob)
+      })).filter((item) => item.action)
+    };
+  }
+
+  async function loadModernReviewData() {
+    const taskId = reviewTaskId();
+    if (!taskId) throw new Error("BigCoachの解析タスクIDを取得できませんでした");
+    if (currentModernReviewData?.taskId === taskId) return currentModernReviewData;
+    const result = await fetch(`/api/v2/tasks/${encodeURIComponent(taskId)}/result`, { credentials: "include" }).then((response) => response.json());
+    if (!result?.success || !result?.data?.jsonUrl) {
+      throw new Error(result?.message || "BigCoachの解析データ情報を取得できませんでした");
+    }
+    const data = await fetch(result.data.jsonUrl, { credentials: "include" }).then((response) => response.json());
+    currentModernReviewData = { taskId, meta: result.data, data };
+    return currentModernReviewData;
+  }
+
+  function flattenModernEntries(reviewData) {
+    const kyokus = reviewData?.review?.kyokus || [];
+    const entries = [];
+    let mismatchOrdinal = 0;
+    for (let kyokuIndex = 0; kyokuIndex < kyokus.length; kyokuIndex += 1) {
+      const kyoku = kyokus[kyokuIndex];
+      for (let entryIndex = 0; entryIndex < (kyoku.entries || []).length; entryIndex += 1) {
+        const entry = kyoku.entries[entryIndex];
+        const gameInfo = parseGameInfo(entry);
+        const lance = modernLanceData(entry);
+        entries.push({
+          kyokuIndex,
+          entryIndex,
+          mismatchOrdinal: entry.is_equal ? null : mismatchOrdinal++,
+          kyoku: Number(kyoku.kyoku || 0),
+          honba: Number(kyoku.honba || 0),
+          handCounter: kyokuIndex,
+          plyCounter: entryIndex,
+          roundText: modernRoundLabel(gameInfo),
+          turn: Number(entry.junme || 0),
+          actual: actionLabel(entry.actual),
+          recommended: actionLabel(entry.expected),
+          actualProbability: modernDecisionProbability(entry, entry.actual),
+          qGap: null,
+          handTiles: [...(entry.state?.tehai || [])].map(normalizeTile).filter(Boolean),
+          judgmentType: entry.actual?.type === "reach" ? "riichi" :
+            ["chi", "pon", "daiminkan", "ankan", "kakan"].includes(entry.actual?.type) ? "call" : "discard",
+          shanten: Number(entry.shanten),
+          atSelfRiichi: Boolean(entry.at_self_riichi),
+          ownRiichiMoment: entry.actual?.type === "reach",
+          opponentRiichi: Boolean(gameInfo?.game_info?.riichi?.some((item, index) => index !== 0 && (item?.declared || item?.accepted))),
+          isBad: !entry.is_equal,
+          initialHands: gameInfo?.game_info?.hand?.tiles ? [gameInfo.game_info.hand.tiles.map(normalizeTile).filter(Boolean).sort().join("")] : [],
+          lanceExpected: actionLabel(lance?.expected),
+          lanceIsEqual: Boolean(lance?.isEqual),
+          lanceProbability: lance ? modernDecisionProbability({ details: lance.details }, entry.actual) : null,
+          entry,
+          gameInfo
+        });
+      }
+    }
+    return entries;
+  }
+
+  function modernCurrentHandTiles() {
+    const hand = document.querySelector('div[class*="handTiles"]');
+    return imagesWithin(hand).filter(Boolean);
+  }
+
+  function modernCurrentOtherHands() {
+    return [...document.querySelectorAll('div[class*="ohand"]')].map((element) => imagesWithin(element).filter(Boolean));
+  }
+
+  function modernCurrentCandidateRows() {
+    const columns = [...document.querySelectorAll('div[class*="candCol"]')];
+    const mainColumn = columns[0];
+    if (!mainColumn) return [];
+    return [...mainColumn.querySelectorAll('div[class*="cand_"]')].filter((el) => el.querySelector('span[class*="candRank"]') && el.querySelector('span[class*="candLabel"]')).map((el) => {
+      const label = String(el.querySelector('span[class*="candLabel"]')?.textContent || "").trim();
+      const action = /立直|リーチ|riichi|reach/i.test(label) ? "reach" : null;
+      return {
+        tile: normalizeTile(el.querySelector('img[alt]')?.alt || "") || action,
+        label,
+        value: (Number(String(el.querySelector('span[class*="candProb"]')?.textContent || "").replace("%", "")) || 0) / 100
+      };
+    }).filter((row) => row.tile);
+  }
+
+  function candidateSignature(rows) {
+    return rows.map((row) => `${row.label}:${row.tile}:${Number(row.value || 0).toFixed(1)}`).join("|");
+  }
+
+  function candidateProbabilitySignature(rows, limit = 5) {
+    return rows.slice(0, limit).map((row) =>
+      `${row.tile}:${Number(row.value || 0).toFixed(3)}`
+    ).join("|");
+  }
+
+  function modernCurrentEntry(entries) {
+    const handTiles = modernCurrentHandTiles().sort().join(",");
+    const currentRows = modernCurrentCandidateRows();
+    const signatureLimit = Math.min(5, currentRows.length);
+    const currentProbabilitySignature = candidateProbabilitySignature(currentRows, signatureLimit);
+    if (currentRows.length) {
+      const byCandidates = entries.find((item) =>
+        candidateProbabilitySignature(candidateRows(item.entry), signatureLimit) === currentProbabilitySignature);
+      if (byCandidates) return byCandidates;
+    }
+    return entries.find((item) => {
+      const entryHand = [...(item.entry.state?.tehai || [])].map(normalizeTile).filter(Boolean).sort().join(",");
+      const entrySignature = candidateSignature(candidateRows(item.entry).slice(0, currentRows.length || 3));
+      return entryHand === handTiles &&
+        (!currentRows.length || candidateSignature(currentRows).slice(0, 120) === entrySignature.slice(0, 120));
+    }) || entries[0] || null;
+  }
+
+  function modernSceneFromEntry(target, reviewData, entries) {
+    const entry = target.entry;
+    const gameInfo = target.gameInfo;
+    const otherHands = modernCurrentOtherHands();
+    const otherHandSets = (gameInfo?.game_info?.other_hands || []).map((hand) =>
+      [...(hand.open_sets || [])].flatMap(modernOpenSetTiles)
+    );
+    const selfCallTiles = [...(entry.state?.fuuros || [])].flatMap((meld) => [meld.pai, ...(meld.consumed || [])].map(normalizeTile).filter(Boolean));
+    const opponentCallTiles = otherHandSets.flat();
+    const raw = {
+      title: "Mahjong Review",
+      handTiles: [...(entry.state?.tehai || [])].map(normalizeTile).filter(Boolean),
+      drawTile: entry.tile ? normalizeTile(entry.tile) : null,
+      riverTiles: [...(gameInfo?.game_info?.rivers || [])].flat().map(normalizeTile).filter(Boolean),
+      callTiles: [selfCallTiles, ...otherHandSets].flat(),
+      opponentCallTiles,
+      selfCallTiles,
+      selfMelds: buildMelds(selfCallTiles),
+      doraTiles: [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
+      roundText: modernRoundLabel(gameInfo),
+      honba: Number(gameInfo?.game_info?.round?.honba || 0),
+      seatText: modernSeatLabel(gameInfo),
+      actorText: modernSeatLabel(gameInfo),
+      tilesLeftText: String(gameInfo?.game_info?.tiles_left || entry.tiles_left || ""),
+      currentTurn: Number(entry.junme || 0),
+      scores: (gameInfo?.game_info?.scores || []).map((score) => Number(score)),
+      actualDiscard: actionLabel(entry.actual),
+      recommendedDiscard: actionLabel(entry.expected),
+      candidates: candidateRows(entry),
+      aiSummary: entry.is_equal ? "AI一致" : "AI不一致",
+      judgmentType: judgmentType(entry),
+      handsBySeat: [
+        [...(entry.state?.tehai || [])].map(normalizeTile).filter(Boolean),
+        ...otherHands.map((hand) => hand.filter(Boolean))
+      ],
+      shanten: entry.shanten == null ? null : Number(entry.shanten),
+      atSelfRiichi: Boolean(entry.at_self_riichi),
+      ownRiichiMoment: entry.actual?.type === "reach",
+      opponentRiichi: Boolean(gameInfo?.game_info?.riichi?.some((item, index) => index !== 0 && (item?.declared || item?.accepted))),
+      sourcePosition: {
+        kyokuIndex: target.kyokuIndex,
+        entryIndex: target.entryIndex,
+        mismatchOrdinal: target.mismatchOrdinal,
+        handCounter: target.handCounter,
+        plyCounter: target.plyCounter
+      },
+      diagnostics: {
+        modern: true,
+        taskId: reviewData.taskId,
+        currentEntryFound: Boolean(target),
+        reviewedEntryCount: entries.length
+      }
+    };
+    return validateScene(normalizeScene(raw, bigCoachView.webContents.getURL()));
+  }
+
   function entryMetrics(entry) {
     const best = entry.details?.find((item) => actionEquals(item.action, entry.expected)) || entry.details?.[0];
     const actual = entry.details?.find((item) => actionEquals(item.action, entry.actual));
@@ -141,6 +404,10 @@
   }
 
   async function reviewedEntries() {
+    if (isModernReviewPage()) {
+      const review = await loadModernReviewData();
+      return flattenModernEntries(review.data);
+    }
     await ensureClassicFrame();
     const game = doc().defaultView?.MM?.GS;
     const data = game?.fullData;
@@ -173,6 +440,21 @@
   }
 
   function currentEntry(entries) {
+    if (isModernReviewPage()) {
+      const target = modernCurrentEntry(entries);
+      if (!target) return null;
+      return {
+        kyokuIndex: target.kyokuIndex,
+        entryIndex: target.entryIndex,
+        mismatchOrdinal: target.mismatchOrdinal,
+        kyoku: target.kyoku,
+        honba: target.honba,
+        handCounter: target.handCounter,
+        plyCounter: target.plyCounter,
+        entry: target.entry,
+        metrics: entryMetrics(target.entry)
+      };
+    }
     const game = doc().defaultView?.MM?.GS;
     const event = game?.ge?.[game.hand_counter]?.[game.ply_counter];
     if (event?.mortalEval) {
@@ -239,6 +521,66 @@
   }
 
   async function scrape() {
+    if (isModernReviewPage()) {
+      const review = await loadModernReviewData();
+      const entries = flattenModernEntries(review.data);
+      const current = modernCurrentEntry(entries);
+      const entry = current?.entry || entries[0]?.entry;
+      const gameInfo = current?.gameInfo || parseGameInfo(entry);
+      const currentHand = modernCurrentHandTiles().filter(Boolean);
+      const otherHands = modernCurrentOtherHands();
+      const selfCallTiles = [...(entry?.state?.fuuros || [])].flatMap((meld) => [meld.pai, ...(meld.consumed || [])].map(normalizeTile).filter(Boolean));
+      const callTilesBySeat = [
+        selfCallTiles,
+        ...((gameInfo?.game_info?.other_hands || []).map((hand) => [...(hand.open_sets || [])].flatMap(modernOpenSetTiles)))
+      ];
+      const handsBySeat = [currentHand.length ? currentHand : (entry?.state?.tehai || []).map(normalizeTile).filter(Boolean), ...otherHands];
+      const scoreTexts = (gameInfo?.game_info?.scores || []).map((score, index) => {
+        const seat = ["東", "南", "西", "北"][index] || `P${index}`;
+        return `${seat} ${Number(score).toLocaleString("ja-JP")}`;
+      });
+      return {
+        title: document.title,
+        handTiles: currentHand.length ? currentHand : [...(entry?.state?.tehai || [])].map(normalizeTile).filter(Boolean),
+        drawTile: entry?.tile ? normalizeTile(entry.tile) : null,
+        riverTiles: [...(gameInfo?.game_info?.rivers || [])].flat().map(normalizeTile).filter(Boolean),
+        callTiles: callTilesBySeat.flat(),
+        opponentCallTiles: callTilesBySeat.slice(1).flat(),
+        selfCallTiles,
+        selfMelds: buildMelds(selfCallTiles),
+        doraTiles: [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
+        roundText: current?.roundText || modernRoundLabel(gameInfo),
+        honba: Number(gameInfo?.game_info?.round?.honba || 0),
+        seatText: modernSeatLabel(gameInfo),
+        actorText: modernSeatLabel(gameInfo),
+        tilesLeftText: String(gameInfo?.game_info?.tiles_left || entry?.tiles_left || ""),
+        currentTurn: Number(entry?.junme || 0),
+        scores: (gameInfo?.game_info?.scores || []).map((score) => Number(score)),
+        actualDiscard: actionLabel(entry?.actual),
+        recommendedDiscard: actionLabel(entry?.expected),
+        candidates: candidateRows(entry),
+        aiSummary: entry?.is_equal ? "AI一致" : "AI不一致",
+        judgmentType: judgmentType(entry),
+        handsBySeat,
+        shanten: entry?.shanten ?? null,
+        atSelfRiichi: Boolean(entry?.at_self_riichi),
+        ownRiichiMoment: entry?.actual?.type === "reach",
+        opponentRiichi: Boolean(gameInfo?.game_info?.riichi?.some((item, index) => index !== 0 && (item?.declared || item?.accepted))),
+        sourcePosition: current ? {
+          kyokuIndex: current.kyokuIndex,
+          entryIndex: current.entryIndex,
+          mismatchOrdinal: current.mismatchOrdinal,
+          handCounter: current.handCounter,
+          plyCounter: current.plyCounter
+        } : null,
+        diagnostics: {
+          modern: true,
+          currentEntryFound: Boolean(current),
+          reviewedEntryCount: entries.length,
+          mismatchCount: entries.filter((item) => item.mismatchOrdinal != null).length
+        }
+      };
+    }
     await ensureClassicFrame();
     const page = doc();
     const entries = await reviewedEntries();
@@ -298,8 +640,87 @@
     };
   }
 
+  function modernButtonByText(texts) {
+    const expected = (Array.isArray(texts) ? texts : [texts])
+      .map((text) => String(text).replace(/\s+/g, ""))
+      .filter(Boolean);
+    return [...document.querySelectorAll("button")].find((button) => {
+      if (button.disabled) return false;
+      const label = String(button.textContent || "").replace(/\s+/g, "");
+      return expected.some((text) => label === text || label.includes(text) || text.includes(label));
+    }) || null;
+  }
+
+  async function clickModernButton(texts) {
+    const button = modernButtonByText(texts);
+    if (!button) {
+      const labels = (Array.isArray(texts) ? texts : [texts]).join(" / ");
+      return { ok: false, reason: `BigCoach新UIのボタン「${labels}」が見つかりません` };
+    }
+    const rect = button.getBoundingClientRect();
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.x + rect.width / 2,
+      clientY: rect.y + rect.height / 2,
+      button: 0,
+      buttons: 1
+    };
+    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      button.dispatchEvent(new MouseEvent(type, options));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return { ok: true, text: String(button.textContent || "").trim() };
+  }
+
+  function modernDecisionKey(decision) {
+    return `${Number(decision.kyokuIndex ?? decision.handCounter ?? -1)}:${Number(decision.entryIndex ?? decision.plyCounter ?? -1)}`;
+  }
+
+  function modernComparePosition(left, right) {
+    return (Number(left.kyokuIndex) - Number(right.kyokuIndex)) || (Number(left.entryIndex) - Number(right.entryIndex));
+  }
+
+  function modernLanceMisfire(decision, threshold = 0.05) {
+    return decision?.judgmentType === "discard" &&
+      Number.isFinite(Number(decision?.lanceProbability)) &&
+      Number(decision.lanceProbability) < threshold;
+  }
+
+  function currentModernLanceMisfire(threshold = 0.05) {
+    const columns = [...document.querySelectorAll('div[class*="candCol"]')];
+    const lanceColumn = columns.find((column) => /Lance/i.test(column.querySelector('div[class*="candColHead"]')?.textContent || ""));
+    if (!lanceColumn) return false;
+    const selected = [...lanceColumn.querySelectorAll('div[class*="cand_"]')]
+      .find((row) => String(row.className || "").includes("_you_"));
+    if (!selected) return false;
+    const probability = Number(String(selected.querySelector('span[class*="candProb"]')?.textContent || "").replace("%", "")) / 100;
+    return Number.isFinite(probability) && probability < threshold;
+  }
+
   async function clickControl(id) {
     closeOverlays();
+    if (isModernReviewPage()) {
+      const modernTexts = {
+        "#ply-dec2": "前へ",
+        "#ply-inc2": "次へ",
+        "#prev-mismatch": "前のミス",
+        "#next-mismatch": "次のミス",
+        "#prev-shin": "前のシン悪手",
+        "#next-shin": "次のシン悪手",
+        "#prev-major": "前の大悪手",
+        "#next-major": "次の大悪手",
+        "#prev-nanikiru": "前の何切る悪手",
+        "#next-nanikiru": "次の何切る悪手",
+        "#prev-turn": "前の手番",
+        "#next-turn": "次の手番",
+        "#prev-round": "前局",
+        "#next-round": "次局"
+      };
+      const text = modernTexts[id];
+      if (!text) return { ok: false, reason: `BigCoach新UIでは未対応の操作です: ${id}` };
+      return clickModernButton(text);
+    }
     const control = doc().querySelector(id);
     if (!control) return { ok: false, reason: `BigCoach操作ボタン ${id} が見つかりませんでした` };
     control.click();
@@ -308,6 +729,53 @@
   }
 
   async function navigate(kind) {
+    if (isModernReviewPage()) {
+      const review = await loadModernReviewData();
+      const entries = flattenModernEntries(review.data);
+      const current = modernCurrentEntry(entries);
+      if (kind === "previousLance" || kind === "nextLance") {
+        const stepLabel = kind === "previousLance" ? "\u524d\u306e\u624b\u756a" : "\u6b21\u306e\u624b\u756a";
+        for (let attempt = 0; attempt < Math.max(200, entries.length * 2); attempt += 1) {
+          const result = await clickModernButton(stepLabel);
+          if (!result.ok) return result;
+          if (currentModernLanceMisfire()) return { ok: true };
+        }
+        return { ok: false, reason: "Lance悪手に該当する局面へ移動できませんでした" };
+      }
+      if (kind === "previous" || kind === "next") {
+        return clickModernButton(kind === "previous" ? "\u524d\u306e\u624b\u756a" : "\u6b21\u306e\u624b\u756a");
+      }
+      if (kind === "previousRound" || kind === "nextRound") {
+        return clickModernButton(kind === "previousRound" ? "前局" : "次局");
+      }
+      const predicates = {
+        previousMistake: (item) => item.isBad,
+        nextMistake: (item) => item.isBad,
+        previousShin: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad,
+        nextShin: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad,
+        previousMajor: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad &&
+          (Number(item.shanten) <= 1 || item.opponentRiichi),
+        nextMajor: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad &&
+          (Number(item.shanten) <= 1 || item.opponentRiichi),
+        previousNanikiru: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad,
+        nextNanikiru: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad,
+        previousLance: (item) => modernLanceMisfire(item),
+        nextLance: (item) => modernLanceMisfire(item)
+      };
+      const predicate = predicates[kind];
+      if (!predicate) return { ok: false, reason: `未対応の遷移種別です: ${kind}` };
+      const matches = entries.filter(predicate).sort((left, right) => (left.kyokuIndex - right.kyokuIndex) || (left.entryIndex - right.entryIndex));
+      if (!matches.length) return { ok: false, reason: `${kind} に該当する局面がありません` };
+      const direction = kind.startsWith("previous") ? -1 : 1;
+      let target = null;
+      if (current) {
+        target = direction > 0
+          ? matches.find((item) => modernComparePosition(item, current) > 0)
+          : [...matches].reverse().find((item) => modernComparePosition(item, current) < 0);
+      }
+      target = target || (direction > 0 ? matches[0] : matches.at(-1));
+      return goToPosition(target.handCounter, target.plyCounter);
+    }
     const controls = { previousMistake: "#prev-mismatch", nextMistake: "#next-mismatch" };
     if (kind === "previous" || kind === "next") {
       const entries = await reviewedEntries();
@@ -333,6 +801,10 @@
   }
 
   async function listDecisions() {
+    if (isModernReviewPage()) {
+      const review = await loadModernReviewData();
+      return flattenModernEntries(review.data);
+    }
     await ensureClassicFrame();
     const game = doc().defaultView?.MM?.GS;
     if (!game?.ge) throw new Error("BigCoachプレイヤーの局面データを取得できませんでした");
@@ -379,6 +851,36 @@
 
   async function goToPosition(handCounter, plyCounter) {
     closeOverlays();
+    if (isModernReviewPage()) {
+      const review = await loadModernReviewData();
+      const entries = flattenModernEntries(review.data);
+      const target = entries.find((item) =>
+        Number(item.handCounter) === Number(handCounter) &&
+        Number(item.plyCounter) === Number(plyCounter));
+      if (!target) return { ok: false, reason: "指定された局面がBigCoach新UIの解析結果にありません" };
+      const current = modernCurrentEntry(entries);
+      if (current &&
+          Number(current.handCounter) === Number(target.handCounter) &&
+          Number(current.plyCounter) === Number(target.plyCounter)) {
+        return { ok: true };
+      }
+      const currentIndex = current ? entries.findIndex((item) => modernDecisionKey(item) === modernDecisionKey(current)) : -1;
+      const targetIndex = entries.findIndex((item) => modernDecisionKey(item) === modernDecisionKey(target));
+      if (targetIndex < 0) return { ok: false, reason: "遷移先の局面を特定できませんでした" };
+      const stepLabel = currentIndex >= 0 && targetIndex < currentIndex ? "\u524d\u306e\u624b\u756a" : "\u6b21\u306e\u624b\u756a";
+      const stepCount = Math.max(1, Math.abs(targetIndex - Math.max(0, currentIndex)) + 2);
+      for (let attempt = 0; attempt < stepCount; attempt += 1) {
+        const result = await clickModernButton(stepLabel);
+        if (!result.ok) return result;
+        const after = modernCurrentEntry(entries);
+        if (after &&
+            Number(after.handCounter) === Number(target.handCounter) &&
+            Number(after.plyCounter) === Number(target.plyCounter)) {
+          return { ok: true };
+        }
+      }
+      return { ok: false, reason: "BigCoach新UI上で目的の局面へ移動できませんでした" };
+    }
     await ensureClassicFrame();
     const page = doc();
     const game = page.defaultView?.MM?.GS;
@@ -408,7 +910,69 @@
     return goToPosition(target.handCounter, target.plyCounter);
   }
 
+  function visibleImages(selector) {
+    return [...document.querySelectorAll(selector)].filter((image) => {
+      const style = getComputedStyle(image);
+      const rect = image.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" &&
+        Number(style.opacity || 1) > 0 && rect.width > 0 && rect.height > 0;
+    });
+  }
+
+  function modernCaptureVisualState() {
+    const candidateRows = [...document.querySelectorAll('div[class*="cand_"], div[class*="candCol"]')];
+    const aiAdviceVisible = candidateRows.some((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    });
+    const opponentImages = visibleImages('div[class*="ohand"] img, div[class*="seatHand"] img');
+    const backTiles = opponentImages.filter((image) => /\/(?:back|Blank)\.(?:svg|png)/i.test(image.currentSrc || image.src)).length;
+    const faceTiles = opponentImages.filter((image) => tileFromImage(image)).length;
+    return {
+      barRectCount: aiAdviceVisible ? 1 : 0,
+      discardBarRectCount: aiAdviceVisible ? 1 : 0,
+      callBarRectCount: 0,
+      candidateDetailRows: candidateRows.length,
+      spoilerVisible: false,
+      aiBarsVisible: aiAdviceVisible,
+      aiAdviceVisible,
+      opponentHands: [],
+      totalOpponentTiles: opponentImages.length,
+      opponentFaceTiles: faceTiles,
+      opponentBackTiles: backTiles,
+      opponentsRevealed: opponentImages.length > 0 && faceTiles > backTiles,
+      opponentsHidden: opponentImages.length === 0 || faceTiles === 0 || backTiles >= faceTiles
+    };
+  }
+
+  function applyModernCaptureMode(mode) {
+    modernCaptureMode = mode;
+    modernCaptureStyle?.remove();
+    modernCaptureStyle = document.createElement("style");
+    modernCaptureStyle.id = "bigcoach-desktop-modern-capture-style";
+    const hideOpponents = `
+      div[class*="ohand"] img:not([src*="back"]):not([src*="Blank"]),
+      div[class*="seatHand"] img:not([src*="back"]):not([src*="Blank"]) {
+        visibility: hidden !important;
+      }
+    `;
+    modernCaptureStyle.textContent = mode === "front" ? `
+      div[class*="candCols"], div[class*="candCol"], div[class*="cand_"] {
+        visibility: hidden !important;
+      }
+      ${hideOpponents}
+    ` : mode === "normal" ? hideOpponents : "";
+    document.head.appendChild(modernCaptureStyle);
+  }
+
+  function modernProbability(label) {
+    const match = String(document.body?.innerText || "").match(new RegExp(`${label}\\s*([0-9.]+)%`));
+    return match ? Number(match[1]) : null;
+  }
+
   function captureVisualState() {
+    if (isModernReviewPage()) return modernCaptureVisualState();
     const page = doc();
     const discardSvg = page.querySelector(".discard-bars-svg");
     const discardBarRectCount = discardSvg?.querySelectorAll("rect").length || 0;
@@ -484,6 +1048,10 @@
   }
 
   function renderCaptureMode(mode) {
+    if (isModernReviewPage()) {
+      applyModernCaptureMode(mode);
+      return { ok: true };
+    }
     const page = doc();
     const game = page.defaultView?.MM?.GS;
     if (!game?.ui) {
@@ -505,6 +1073,13 @@
   }
 
   function captureDisplayState() {
+    if (isModernReviewPage()) {
+      return {
+        showMortal: modernCaptureMode !== "front",
+        showHands: modernCaptureMode === "back",
+        visualState: captureVisualState()
+      };
+    }
     const page = doc();
     const game = page.defaultView?.MM?.GS;
     if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
@@ -528,6 +1103,34 @@
 
   async function prepareCapture(mode) {
     closeOverlays();
+    if (isModernReviewPage()) {
+      applyModernCaptureMode(mode);
+      await waitForVisualPaint(4);
+      const boardRect = document.querySelector('[class*="board"], [class*="table"], main')?.getBoundingClientRect();
+      return {
+        hiddenOuterCount: 0,
+        relativeToFrame: false,
+        displayState: {
+          showMortal: mode === "back",
+          showHands: mode === "back",
+          hasAiAnalysis: /AI|Analysis|Lance|MoE/i.test(String(document.body?.innerText || "")),
+          hasNanikiruNotice: mode === "front",
+          ...captureVisualState()
+        },
+        outcomes: mode === "back" ? {
+          draw: modernProbability("流局確率"),
+          movement: modernProbability("横移動確率"),
+          dealIn: modernProbability("放銃確率"),
+          win: modernProbability("和了確率")
+        } : null,
+        rect: mode === "front" && boardRect ? {
+          x: Math.max(0, Math.floor(boardRect.x)),
+          y: Math.max(0, Math.floor(boardRect.y)),
+          width: Math.ceil(boardRect.width),
+          height: Math.ceil(boardRect.height)
+        } : null
+      };
+    }
     await ensureClassicFrame();
     const hiddenOuter = [];
     if (window.top === window) {
@@ -574,6 +1177,21 @@
   }
 
   async function restoreCapture(previous) {
+    if (isModernReviewPage()) {
+      if (previous?.showMortal && !previous?.showHands) {
+        applyModernCaptureMode("normal");
+      } else {
+        modernCaptureStyle?.remove();
+        modernCaptureStyle = null;
+        modernCaptureMode = null;
+      }
+      await waitForVisualPaint(4);
+      return {
+        showMortal: Boolean(previous?.showMortal),
+        showHands: Boolean(previous?.showHands),
+        visualState: captureVisualState()
+      };
+    }
     const page = doc();
     const game = page.defaultView?.MM?.GS;
     if (!game || !previous) return null;

@@ -1,0 +1,24 @@
+[2026-06-26 13:17:49.164] [logger] [info] mahjong-cpp 0.9.1
+[2026-06-26 13:17:49.164] [logger] [info] Launching server... (port: 50000)
+[2026-06-26 14:11:59.331] [logger] [info] mahjong-cpp 0.9.1
+[2026-06-26 14:11:59.331] [logger] [info] Launching server... (port: 50000)
+[2026-06-26 14:13:27.336] [logger] [info] mahjong-cpp 0.9.1
+[2026-06-26 14:13:27.336] [logger] [info] Launching server... (port: 50000)
+[2026-06-26 14:22:25.567] [logger] [info] mahjong-cpp 0.9.1
+[2026-06-26 14:22:25.567] [logger] [info] Launching server... (port: 50000)
+[2026-06-26 14:23:06.140] [logger] [info] ip: , version: 0.9.1, round: 1z, seat: 1z, indicators: 7s, hand: 3m337p1388s335577z, melds: , wall: 4434344444424343443434343244424242111, reddora: true, uradora: true, shantendown: true, tegawari: true, riichi: true, analysis: false, analysis_yaku_mode: node_delta
+[2026-06-26 14:23:06.141] [logger] [info] ip: , version: 0.9.1, round: 1z, seat: 1z, indicators: 7s, hand: 3m337p1388s335577z, melds: , wall: 4434444444424443443434443244424242111, reddora: true, uradora: true, shantendown: true, tegawari: true, riichi: true, analysis: false, analysis_yaku_mode: node_delta
+[2026-06-26 14:24:43.485] [logger] [info] mahjong-cpp 0.9.1
+[2026-06-26 14:24:43.485] [logger] [info] Launching server... (port: 50000)
+[2026-06-26 14:25:20.545] [logger] [info] ip: , version: 0.9.1, round: 1z, seat: 1z, indicators: 7s, hand: 3337p1388s335577z, melds: , wall: 4444344444414343443434343244424242111, reddora: true, uradora: true, shantendown: true, tegawari: true, riichi: true, analysis: false, analysis_yaku_mode: node_delta
+[2026-06-26 14:25:20.545] [logger] [info] ip: , version: 0.9.1, round: 1z, seat: 1z, indicators: 7s, hand: 3337p1388s335577z, melds: , wall: 4444444444414443443434443244424242111, reddora: true, uradora: true, shantendown: true, tegawari: true, riichi: true, analysis: false, analysis_yaku_mode: node_delta
+[2026-06-26 14:26:53.345] [logger] [info] mahjong-cpp 0.9.1
+[2026-06-26 14:26:53.345] [logger] [info] Launching server... (port: 50000)
+[2026-06-26 14:28:27.290] [logger] [info] mahjong-cpp 0.9.1
+[2026-06-26 14:28:27.290] [logger] [info] Launching server... (port: 50000)
+[2026-06-26 14:29:05.240] [logger] [info] ip: , version: 0.9.1, round: 1z, seat: 1z, indicators: 1m, hand: 123m1223789p5577z, melds: , wall: 2334344443234343334444344444444242111, reddora: true, uradora: true, shantendown: true, tegawari: true, riichi: true, analysis: false, analysis_yaku_mode: node_delta
+[2026-06-26 14:29:05.241] [logger] [info] ip: , version: 0.9.1, round: 1z, seat: 1z, indicators: 1m, hand: 123m1223789p5577z, melds: , wall: 2334444443234443334444444444444242111, reddora: true, uradora: true, shantendown: true, tegawari: true, riichi: true, analysis: false, analysis_yaku_mode: node_delta
+[2026-06-26 14:32:06.577] [logger] [info] mahjong-cpp 0.9.1
+[2026-06-26 14:32:06.577] [logger] [info] Launching server... (port: 50000)
+[2026-06-26 14:32:44.590] [logger] [info] ip: , version: 0.9.1, round: 1z, seat: 1z, indicators: 1m, hand: 123m1223789p5577z, melds: , wall: 2334444443234443334444444444444242111, reddora: true, uradora: true, shantendown: true, tegawari: true, riichi: true, analysis: false, analysis_yaku_mode: node_delta
+[2026-06-26 14:32:44.591] [logger] [info] ip: , version: 0.9.1, round: 1z, seat: 1z, indicators: 1m, hand: 123m1223789p5577z, melds: , wall: 2334344443234343334444344444444242111, reddora: true, uradora: true, shantendown: true, tegawari: true, riichi: true, analysis: false, analysis_yaku_mode: node_delta

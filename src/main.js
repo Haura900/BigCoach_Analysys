@@ -154,6 +154,7 @@ function findAnalysisFrame(frame = bigCoachView?.webContents.mainFrame) {
     const found = findAnalysisFrame(child);
     if (found) return found;
   }
+  if (/^https:\/\/review\.bigcoach\.work\/review\/[^/?#]+/.test(frame.url || "")) return frame;
   return null;
 }
 
@@ -236,6 +237,14 @@ async function loadDecisions() {
 
 function comparePosition(left, right) {
   return (left.handCounter - right.handCounter) || (left.plyCounter - right.plyCounter);
+}
+
+function listLanceMistakes(decisions) {
+  return decisions.filter((item) =>
+    item.judgmentType === "discard" &&
+    Number.isFinite(Number(item.lanceProbability)) &&
+    Number(item.lanceProbability) < 0.05
+  );
 }
 
 async function goToDecision(decision) {
@@ -336,6 +345,14 @@ async function navigateExcludingNanikiru(kind, targets, current) {
 }
 
 async function navigate(kind) {
+  if (kind.endsWith("Lance")) {
+    await ensureAdapter();
+    const result = await executeAdapter(
+      `window.__bigcoachDesktop.navigate(${JSON.stringify(kind)})`
+    );
+    if (!result.ok) throw new Error(result.reason || "Lance悪手局面へ移動できませんでした。");
+    return captureScene();
+  }
   const decisions = await loadDecisions();
   const current = currentScene?.sourcePosition || (await captureScene()).sourcePosition;
   const direction = kind.startsWith("previous") ? -1 : 1;
@@ -347,6 +364,8 @@ async function navigate(kind) {
     targets = decisions.filter((item) => /^[0-9][mpsz]$/.test(item.actual || ""));
   } else if (kind.endsWith("Mistake")) {
     targets = decisions.filter((item) => item.isBad);
+  } else if (kind.endsWith("Lance")) {
+    targets = listLanceMistakes(decisions);
   } else if (kind.endsWith("Shin")) {
     targets = listShinMistakes(decisions, settings);
   } else if (kind.endsWith("Major")) {
@@ -453,6 +472,25 @@ function tileHtml(code, mediaMode = "preview") {
     : tileDataUrls()[code];
   return `<img src="${src}" alt="${escapeHtml(code)}" title="${escapeHtml(code)}" style="height:38px;vertical-align:middle">`;
 }
+
+function safeTileFilename(code) {
+  try {
+    return tileFilename(code);
+  } catch {
+    return null;
+  }
+}
+
+function safeTileHtml(code, mediaMode = "preview") {
+  const filename = safeTileFilename(code);
+  if (!code || !filename) return `<span>${escapeHtml(code || "取得なし")}</span>`;
+  const src = mediaMode === "anki"
+    ? `bigcoach_tile_${filename}`
+    : tileDataUrls()[code];
+  return `<img src="${src}" alt="${escapeHtml(code)}" title="${escapeHtml(code)}" style="height:38px;vertical-align:middle">`;
+}
+
+tileHtml = safeTileHtml;
 
 function candidateTable(title, analysis, mediaMode = "preview") {
   if (!analysis?.candidates?.length) return `<h3>${escapeHtml(title)}</h3><p>結果なし</p>`;
@@ -766,9 +804,10 @@ async function storeTileMediaForNanikiru(scene, simulation) {
       candidate.tile,
       ...(candidate.ukeire || []).map((item) => item.tile)
     ])
-  ].filter((code) => tileFilename(code)));
+  ].filter((code) => safeTileFilename(code)));
   for (const code of codes) {
-    const filename = tileFilename(code);
+    const filename = safeTileFilename(code);
+    if (!filename) continue;
     const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
     await anki.storeMedia(`bigcoach_tile_${filename}`, data);
   }
@@ -1050,10 +1089,11 @@ function registerIpc() {
       ...[currentSimulation?.withWall, currentSimulation?.withoutWall].flatMap((analysis) =>
         (analysis?.candidates || []).flatMap((candidate) =>
           [candidate.tile, ...(candidate.ukeire || []).map((item) => item.tile)]))
-    ].filter((code) => tileFilename(code)));
+    ].filter((code) => safeTileFilename(code)));
     try {
       for (const code of tileCodes) {
-        const filename = tileFilename(code);
+        const filename = safeTileFilename(code);
+        if (!filename) continue;
         const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
         await anki.storeMedia(`bigcoach_tile_${filename}`, data);
       }
