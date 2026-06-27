@@ -739,6 +739,16 @@
       const current = modernCurrentEntry(entries);
       if (kind === "previousLance" || kind === "nextLance") {
         const stepLabel = kind === "previousLance" ? "\u524d\u306e\u30df\u30b9" : "\u6b21\u306e\u30df\u30b9";
+        const hasDirectionalMatch = current
+          ? (kind === "nextLance"
+            ? matches.some((item) => modernComparePosition(item, current) > 0)
+            : matches.some((item) => modernComparePosition(item, current) < 0))
+          : true;
+        if (!hasDirectionalMatch) {
+          const fallback = kind === "nextLance" ? matches[0] : matches.at(-1);
+          if (!fallback) return { ok: false, reason: "Lance謔ｪ謇九↓隧ｲ蠖薙☆繧句ｱ髱｢縺後≠繧翫∪縺帙ｓ" };
+          return goToPosition(fallback.handCounter, fallback.plyCounter);
+        }
         for (let attempt = 0; attempt < Math.max(200, entries.length * 2); attempt += 1) {
           const result = await clickModernButton(stepLabel);
           if (!result.ok) return result;
