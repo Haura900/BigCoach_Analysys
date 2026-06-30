@@ -14,7 +14,8 @@ contextBridge.exposeInMainWorld("bigcoachApp", {
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   previewCard: (memo) => ipcRenderer.invoke("anki:preview", memo),
   registerCard: (payload) => ipcRenderer.invoke("anki:register", payload),
-  bulkRegisterNanikiru: () => ipcRenderer.invoke("anki:bulk-register-nanikiru"),
+  previewRiskReadingCard: (payload) => ipcRenderer.invoke("anki:preview-risk-reading", payload),
+  registerRiskReadingCard: (payload) => ipcRenderer.invoke("anki:register-risk-reading", payload),
   reloadBigCoach: () => ipcRenderer.invoke("bigcoach:reload"),
   openLogs: () => ipcRenderer.invoke("app:open-logs"),
   setPanelWidth: (width) => ipcRenderer.send("layout:panel-width", width),
@@ -28,10 +29,5 @@ contextBridge.exposeInMainWorld("bigcoachApp", {
     const listener = (_event, result) => callback(result);
     ipcRenderer.on("stats:updated", listener);
     return () => ipcRenderer.removeListener("stats:updated", listener);
-  },
-  onNanikiruBulkProgress: (callback) => {
-    const listener = (_event, progress) => callback(progress);
-    ipcRenderer.on("nanikiru:bulk-progress", listener);
-    return () => ipcRenderer.removeListener("nanikiru:bulk-progress", listener);
   }
 });

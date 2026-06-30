@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, safeStorage } = require("electron");
 const path = require("node:path");
@@ -7,7 +7,7 @@ const { normalizeScene, validateScene } = require("./lib/scene");
 const { SimulatorService } = require("./lib/simulator");
 const { AnkiService } = require("./lib/anki");
 const { AuthSessionStore } = require("./lib/auth-session");
-const { codesToMpsz, tileFilename } = require("./lib/tiles");
+const { tileFilename } = require("./lib/tiles");
 const {
   classifyShinMistake,
   classifyMajorMistake,
@@ -20,18 +20,14 @@ const {
   summarizeRecords,
   buildTrend
 } = require("./lib/stats");
-const {
-  prefilterNanikiruDecisions,
-  precheckNanikiruMistake,
-  classifyNanikiruMistake
-} = require("./lib/nanikiru-mistake");
-
 const DEFAULT_SETTINGS = {
-  settingsVersion: 3,
+  settingsVersion: 4,
   deckName: "BigCoach",
-  nanikiruMistakeDeckName: "BigCoach::何切る悪手",
-  modelName: "基本",
-  tags: ["BigCoach", "何切る"],
+  riskReadingDeckName: "BigCoach::RiskReading",
+  riskReadingNote: "相手の河から放銃危険度を読む。",
+  riskReadingDeviationThreshold: 0.03,
+  modelName: "陜難ｽｺ隴幢ｽｬ",
+  tags: ["BigCoach"],
   language: "ja",
   enableRedDora: true,
   enableUraDora: false,
@@ -50,8 +46,8 @@ let currentScene;
 let currentSimulation;
 let currentMajorMistakes = [];
 let currentDecisions = [];
-let currentNanikiruMistakes = null;
 let currentCardImages;
+let currentRiskReadingPreview;
 let tileImageCache;
 let statsRefreshTimer;
 let loadedReviewUrl = "";
@@ -95,7 +91,7 @@ function loadSettings() {
     if (!saved.settingsVersion || saved.settingsVersion < 2) {
       if (Number(saved.shinMistakeThreshold) === 0.1) saved.shinMistakeThreshold = 0.001;
     }
-    saved.settingsVersion = 3;
+    saved.settingsVersion = 4;
     return { ...DEFAULT_SETTINGS, ...saved };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -110,7 +106,6 @@ function saveSettings(next) {
   };
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), "utf8");
-  currentNanikiruMistakes = null;
   layoutViews();
   return settings;
 }
@@ -122,11 +117,11 @@ function bigCoachUrl() {
 function validateReviewUrl(value) {
   let url;
   try { url = new URL(String(value || "").trim()); } catch {
-    throw new Error("解析結果URLが正しくありません。");
+    throw new Error("Invalid review URL.");
   }
   if (url.protocol !== "https:" || url.hostname !== "review.bigcoach.work" ||
       !url.pathname.startsWith("/review/")) {
-    throw new Error("https://review.bigcoach.work/review/... のURLを入力してください。");
+    throw new Error("Please enter a URL like https://review.bigcoach.work/review/...");
   }
   return url.href;
 }
@@ -147,6 +142,72 @@ function layoutViews() {
   bigCoachView.setBounds({ x: 0, y: 0, width: Math.max(320, width - panelWidth), height });
 }
 
+function attachBigCoachViewEvents(view) {
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("https://review.bigcoach.work")) {
+      view.webContents.loadURL(url);
+      return { action: "deny" };
+    }
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+  view.webContents.on("did-finish-load", async () => {
+    try {
+      const url = view.webContents.getURL();
+      if (url.includes("/review/")) await ensureAdapter();
+      if (url !== loadedReviewUrl) {
+        currentDecisions = [];
+        currentScene = null;
+        currentSimulation = null;
+        currentCardImages = null;
+        currentRiskReadingPreview = null;
+        loadedReviewUrl = url;
+      }
+      const history = saveReviewHistory(url);
+      mainWindow.webContents.send("bigcoach:status", { ok: true, url, history });
+    } catch (error) {
+      log(error.stack || error);
+      mainWindow.webContents.send("bigcoach:status", { ok: false, message: error.message });
+    }
+  });
+  view.webContents.on("did-frame-finish-load", (_event, isMainFrame) => {
+    if (!isMainFrame && view.webContents.getURL().includes("/review/")) {
+      scheduleAutomaticStatsRefresh();
+    }
+  });
+  view.webContents.on("did-fail-load", (_event, code, description) => {
+    mainWindow.webContents.send("bigcoach:status", { ok: false, message: `${description} (${code})` });
+  });
+}
+
+function createBigCoachView() {
+  const view = new WebContentsView({
+    webPreferences: {
+      partition: "persist:bigcoach",
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  attachBigCoachViewEvents(view);
+  return view;
+}
+
+function replaceBigCoachView() {
+  try {
+    if (bigCoachView) mainWindow.contentView.removeChildView(bigCoachView);
+  } catch {}
+  try {
+    if (bigCoachView?.webContents && !bigCoachView.webContents.isDestroyed()) {
+      bigCoachView.webContents.destroy();
+    }
+  } catch {}
+  bigCoachView = createBigCoachView();
+  mainWindow.contentView.addChildView(bigCoachView);
+  layoutViews();
+  return bigCoachView;
+}
+
 function findAnalysisFrame(frame = bigCoachView?.webContents.mainFrame) {
   if (!frame) return null;
   if (/\/ui_advanced(?:\/|[?#]|$)/.test(frame.url || "")) return frame;
@@ -165,7 +226,7 @@ async function waitForAnalysisFrame(timeoutMs = 12000) {
     if (frame) return frame;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error("BigCoachの解析表示フレームを取得できませんでした。");
+  throw new Error("Could not find the BigCoach analysis frame.");
 }
 
 async function executeAdapter(expression) {
@@ -174,7 +235,7 @@ async function executeAdapter(expression) {
 }
 
 async function ensureAdapter() {
-  if (!bigCoachView || bigCoachView.webContents.isDestroyed()) throw new Error("BigCoach表示が初期化されていません。");
+  if (!bigCoachView || bigCoachView.webContents.isDestroyed()) throw new Error("BigCoach display is not available.");
   const frame = await waitForAnalysisFrame();
   const exists = await frame.executeJavaScript("Boolean(window.__bigcoachDesktop)", true);
   if (!exists) await frame.executeJavaScript(adapterSource, true);
@@ -192,11 +253,28 @@ async function waitForAnalysisReady(timeoutMs = 15000) {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error("BigCoachの解析結果が読み込まれるまで待機しましたが、タイムアウトしました。");
+  throw new Error("BigCoach results did not become ready before timeout.");
+}
+
+async function loadBigCoachReviewUrl(url) {
+  const contents = bigCoachView?.webContents;
+  if (!contents) throw new Error("BigCoach display is not available.");
+  try {
+    await contents.loadURL(url);
+  } catch (error) {
+    if (!["ERR_ABORTED", "ERR_FAILED"].includes(error?.code)) throw error;
+    log(`loadURL reported ${error.code} for ${url}; continuing because renderer waits for scene readiness`);
+    if (contents.isDestroyed()) {
+      const replacement = replaceBigCoachView();
+      replacement.webContents.loadURL(url).catch((loadError) =>
+        log(`replacement loadURL reported ${loadError.code || loadError.message} for ${url}`));
+    }
+  }
 }
 
 async function captureScene() {
   await ensureAdapter();
+  await waitForAnalysisReady();
   const raw = await executeAdapter("window.__bigcoachDesktop.scrape()");
   const normalized = validateScene(normalizeScene(raw, bigCoachView.webContents.getURL()));
   const actualCandidate = normalized.candidates.find((item) => item.tile === normalized.actualDiscard);
@@ -218,13 +296,11 @@ async function captureScene() {
     screenshotDataUrl: null,
     shinMistake: classifyShinMistake(decision, settings),
     majorMistake: classifyMajorMistake(decision, settings),
-    nanikiruMistake: {
-      ...precheckNanikiruMistake(normalized),
-      isNanikiruMistake: false
-    }
+    
   };
   currentSimulation = null;
   currentCardImages = null;
+  currentRiskReadingPreview = null;
   return currentScene;
 }
 
@@ -252,96 +328,8 @@ async function goToDecision(decision) {
   const result = await executeAdapter(
     `window.__bigcoachDesktop.goToPosition(${Number(decision.handCounter)},${Number(decision.plyCounter)})`
   );
-  if (!result.ok) throw new Error(result.reason || "指定局面へ移動できませんでした。");
+  if (!result.ok) throw new Error(result.reason || "Could not move to the target scene.");
   return captureScene();
-}
-
-function nanikiruPositionKey(decision) {
-  return `${Number(decision.handCounter)}:${Number(decision.plyCounter)}`;
-}
-
-function ensureNanikiruCache() {
-  if (!currentNanikiruMistakes) {
-    currentNanikiruMistakes = { evaluated: new Map() };
-  }
-  return currentNanikiruMistakes;
-}
-
-async function evaluateNanikiruDecision(decision) {
-  const cache = ensureNanikiruCache();
-  const key = nanikiruPositionKey(decision);
-  if (cache.evaluated.has(key)) return cache.evaluated.get(key);
-  const scene = await goToDecision(decision);
-  const precheck = precheckNanikiruMistake(scene);
-  if (!precheck.eligible) {
-    const result = { scene, simulation: null, classification: { ...precheck, isNanikiruMistake: false } };
-    cache.evaluated.set(key, result);
-    return result;
-  }
-  log(`nanikiru scan: simulating ${key} ${scene.roundText} ${scene.currentTurn}巡目`);
-  const simulation = await simulator.analyze(scene, settings);
-  const classification = classifyNanikiruMistake(scene, simulation);
-  const result = { scene, simulation, classification };
-  cache.evaluated.set(key, result);
-  if (classification.isNanikiruMistake) log(`nanikiru scan: matched ${key}`);
-  return result;
-}
-
-async function navigateNanikiru(kind, decisions, current) {
-  ensureNanikiruCache();
-  const direction = kind.startsWith("previous") ? -1 : 1;
-  const candidates = prefilterNanikiruDecisions(decisions).sort(comparePosition);
-  if (!candidates.length) throw new Error("何切る悪手の事前条件を満たす局面がありません。");
-  const currentPosition = {
-    handCounter: Number(current?.handCounter ?? -1),
-    plyCounter: Number(current?.plyCounter ?? -1)
-  };
-  const start = direction > 0
-    ? candidates.findIndex((item) => comparePosition(item, currentPosition) > 0)
-    : [...candidates].reverse().findIndex((item) => comparePosition(item, currentPosition) < 0);
-  const normalizedStart = start < 0
-    ? 0
-    : direction > 0 ? start : candidates.length - 1 - start;
-  const ordered = Array.from({ length: candidates.length }, (_, offset) => {
-    const index = (normalizedStart + direction * offset + candidates.length) % candidates.length;
-    return candidates[index];
-  });
-  const original = current;
-  for (const decision of ordered) {
-    const { simulation, classification } = await evaluateNanikiruDecision(decision);
-    if (classification.isNanikiruMistake) {
-      const scene = await goToDecision(decision);
-      scene.nanikiruMistake = classification;
-      currentSimulation = simulation;
-      return scene;
-    }
-  }
-  if (original) await goToDecision(original);
-  throw new Error("該当する何切る悪手がありません。");
-}
-
-async function navigateExcludingNanikiru(kind, targets, current) {
-  const direction = kind.startsWith("previous") ? -1 : 1;
-  const possibleNanikiru = new Set(
-    prefilterNanikiruDecisions(targets).map(nanikiruPositionKey)
-  );
-  const filteredTargets = targets.filter((target) =>
-    !possibleNanikiru.has(nanikiruPositionKey(target)));
-  if (!filteredTargets.length) {
-    throw new Error("何切る悪手候補を除く該当局面がありません。");
-  }
-  const currentPosition = {
-    handCounter: Number(current?.handCounter ?? -1),
-    plyCounter: Number(current?.plyCounter ?? -1)
-  };
-  const sorted = [...filteredTargets].sort(comparePosition);
-  const start = direction > 0
-    ? sorted.findIndex((item) => comparePosition(item, currentPosition) > 0)
-    : [...sorted].reverse().findIndex((item) => comparePosition(item, currentPosition) < 0);
-  const normalizedStart = start < 0 ? 0 : direction > 0 ? start : sorted.length - 1 - start;
-  const ordered = Array.from({ length: sorted.length }, (_, offset) =>
-    sorted[(normalizedStart + direction * offset + sorted.length) % sorted.length]);
-  return goToDecision(ordered[0]);
 }
 
 async function navigate(kind) {
@@ -353,12 +341,20 @@ async function navigate(kind) {
     if (!result.ok) throw new Error(result.reason || "Lance悪手局面へ移動できませんでした。");
     return captureScene();
   }
+  if (kind.endsWith("Shin") || kind.endsWith("Major")) {
+    await ensureAdapter();
+    const modern = await executeAdapter("window.__bigcoachDesktop.captureDisplayState().then(state => typeof state?.aiDisplayChecked === 'boolean').catch(() => false)");
+    if (modern) {
+      const result = await executeAdapter(
+        `window.__bigcoachDesktop.navigate(${JSON.stringify(kind)})`
+      );
+      if (!result.ok) throw new Error(result.reason || "BigCoachの遷移対象局面へ移動できませんでした。");
+      return captureScene();
+    }
+  }
   const decisions = await loadDecisions();
   const current = currentScene?.sourcePosition || (await captureScene()).sourcePosition;
   const direction = kind.startsWith("previous") ? -1 : 1;
-  if (kind.endsWith("Nanikiru")) {
-    return navigateNanikiru(kind, decisions, current);
-  }
   let targets;
   if (kind === "previous" || kind === "next") {
     targets = decisions.filter((item) => /^[0-9][mpsz]$/.test(item.actual || ""));
@@ -371,12 +367,9 @@ async function navigate(kind) {
   } else if (kind.endsWith("Major")) {
     targets = listMajorMistakes(decisions, settings);
   } else {
-    throw new Error(`未対応の移動操作です: ${kind}`);
+    throw new Error(`隴幢ｽｪ陝・ｽｾ陟｢諛翫・驕假ｽｻ陷榊｢捺｡・抄諛翫堤ｸｺ繝ｻ ${kind}`);
   }
-  if (!targets.length) throw new Error("該当する局面がありません。");
-  if (kind.endsWith("Shin") || kind.endsWith("Major")) {
-    return navigateExcludingNanikiru(kind, targets, current);
-  }
+  if (!targets.length) throw new Error("No target scenes found.");
   const currentPosition = {
     handCounter: Number(current?.handCounter ?? -1),
     plyCounter: Number(current?.plyCounter ?? -1)
@@ -393,7 +386,7 @@ async function loadMajorMistakes() {
   currentMajorMistakes = listMajorMistakes(decisions, settings);
   return {
     items: currentMajorMistakes,
-    definition: `1シャンテン以下・聴牌・他家リーチ時に、実打とAI推奨が異なり、実打推奨度が${(Number(settings.shinMistakeThreshold) * 100).toFixed(1)}%以下の局面`
+    definition: `1郢ｧ・ｷ郢晢ｽ｣郢晢ｽｳ郢昴・ﾎｦ闔会ｽ･闕ｳ荵昴・髢ｨ・ｴ霑壼ｾ後・闔蛾摩・ｮ・ｶ郢晢ｽｪ郢晢ｽｼ郢昶扱蜃ｾ邵ｺ・ｫ邵ｲ竏晢ｽｮ貊馴□邵ｺ・ｨAI隰暦ｽｨ陞ゑｽｨ邵ｺ讙守・邵ｺ・ｪ郢ｧ鄙ｫﾂ竏晢ｽｮ貊馴□隰暦ｽｨ陞ゑｽｨ陟趣ｽｦ邵ｺ繝ｻ{(Number(settings.shinMistakeThreshold) * 100).toFixed(1)}%闔会ｽ･闕ｳ荵昴・陞ｻﾂ鬮ｱ・｢`
   };
 }
 
@@ -401,7 +394,7 @@ async function goToMajorMistake(mismatchOrdinal) {
   const decisions = await loadDecisions();
   const target = listMajorMistakes(decisions, settings).find((item) =>
     Number(item.mismatchOrdinal) === Number(mismatchOrdinal));
-  if (!target) throw new Error("指定した大悪手が見つかりませんでした。");
+  if (!target) throw new Error("No major mistake target found.");
   return goToDecision(target);
 }
 
@@ -419,19 +412,17 @@ function comparisonStatus(scene, simulation) {
 
 async function ensureSimulation(scene) {
   if (currentSimulation) {
-    scene.nanikiruMistake = classifyNanikiruMistake(scene, currentSimulation);
     return currentSimulation;
   }
   if (scene.judgmentType === "call") {
     currentSimulation = {
       withWall: { candidates: [], recommendation: null },
       withoutWall: { candidates: [], recommendation: null },
-      skippedReason: "副露判断のため何切るシミュレーター対象外"
+      skippedReason: "Skipped because call scenes are not simulator targets."
     };
     return currentSimulation;
   }
   currentSimulation = await simulator.analyze(scene, settings);
-  scene.nanikiruMistake = classifyNanikiruMistake(scene, currentSimulation);
   return currentSimulation;
 }
 
@@ -466,7 +457,7 @@ function tileDataUrls() {
 }
 
 function tileHtml(code, mediaMode = "preview") {
-  if (!code || !tileFilename(code)) return `<span>${escapeHtml(code || "取得なし")}</span>`;
+  if (!code || !tileFilename(code)) return `<span>${escapeHtml(code || "unknown")}</span>`;
   const src = mediaMode === "anki"
     ? `bigcoach_tile_${tileFilename(code)}`
     : tileDataUrls()[code];
@@ -483,7 +474,7 @@ function safeTileFilename(code) {
 
 function safeTileHtml(code, mediaMode = "preview") {
   const filename = safeTileFilename(code);
-  if (!code || !filename) return `<span>${escapeHtml(code || "取得なし")}</span>`;
+  if (!code || !filename) return `<span>${escapeHtml(code || "unknown")}</span>`;
   const src = mediaMode === "anki"
     ? `bigcoach_tile_${filename}`
     : tileDataUrls()[code];
@@ -495,31 +486,74 @@ tileHtml = safeTileHtml;
 function candidateTable(title, analysis, mediaMode = "preview") {
   if (!analysis?.candidates?.length) return `<h3>${escapeHtml(title)}</h3><p>結果なし</p>`;
   const rows = analysis.candidates.map((candidate) => `
-    <tr><td>${tileHtml(candidate.tile, mediaMode)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
-    <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
-    <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
-    <td><div style="display:flex;flex-wrap:wrap;gap:2px">${candidate.ukeire.map((item) =>
-      `<span style="display:inline-flex;align-items:end">${tileHtml(item.tile, mediaMode)}<small>×${item.count}</small></span>`).join("")}</div>
-    <div>${candidate.ukeireTotal}枚</div></td></tr>`).join("");
+    <tr>
+      <td>${tileHtml(candidate.tile, mediaMode)}</td>
+      <td>${candidate.expectedScore.toFixed(0)}</td>
+      <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
+      <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
+      <td>
+        <div style="display:flex;flex-wrap:wrap;gap:2px">${(candidate.ukeire || []).map((item) =>
+          `<span style="display:inline-flex;align-items:end">${tileHtml(item.tile, mediaMode)}<small>×${item.count}</small></span>`).join("")}</div>
+        <div>${candidate.ukeireTotal}枚</div>
+      </td>
+    </tr>`).join("");
   return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function normalizeCaptureRect(rect) {
+  if (!rect) return null;
+  const bounds = bigCoachView?.getBounds?.() || {};
+  const maxWidth = Number(bounds.width) || 0;
+  const maxHeight = Number(bounds.height) || 0;
+  const x = Math.max(0, Math.floor(Number(rect.x) || 0));
+  const y = Math.max(0, Math.floor(Number(rect.y) || 0));
+  let width = Math.floor(Number(rect.width) || 0);
+  let height = Math.floor(Number(rect.height) || 0);
+  if (maxWidth > 0) width = Math.min(width, Math.max(0, maxWidth - x));
+  if (maxHeight > 0) height = Math.min(height, Math.max(0, maxHeight - y));
+  if (width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+}
+
+async function captureBigCoachPage(rect, label) {
+  const clip = normalizeCaptureRect(rect);
+  let lastError;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      bigCoachView.webContents.invalidate();
+      await executeAdapter("window.__bigcoachDesktop.waitForVisualPaint(2)").catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const image = await Promise.race([
+        clip ? bigCoachView.webContents.capturePage(clip) : bigCoachView.webContents.capturePage(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} capture timed out`)), 10000))
+      ]);
+      log(`card capture: ${label} captured ${clip ? JSON.stringify(clip) : "full page"} attempt=${attempt}`);
+      return image;
+    } catch (error) {
+      lastError = error;
+      log(`card capture: ${label} capture failed attempt=${attempt}: ${error.stack || error}`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw lastError || new Error(`${label} capture failed`);
 }
 
 async function prepareCardImages() {
   await ensureAdapter();
   await executeAdapter("window.__bigcoachDesktop.closeOverlays()");
-  const initialDisplayState = await executeAdapter(
-    "window.__bigcoachDesktop.captureDisplayState()"
-  );
+  const initialDisplayState = await executeAdapter("window.__bigcoachDesktop.captureDisplayState()");
   log(`card capture: initial display ${JSON.stringify(initialDisplayState)}`);
-  const finalDisplayState = { showMortal: true, showHands: false };
+  const finalDisplayState = {
+    showMortal: Boolean(initialDisplayState?.showMortal ?? true),
+    showHands: false
+  };
   let frontState;
   let backState;
   try {
     log("card capture: preparing front");
-    await ensureCardCaptureVisualState("front");
-    await waitForStablePaint("front");
     frontState = await executeAdapter("window.__bigcoachDesktop.prepareCapture('front')");
     log(`card capture: front verified ${JSON.stringify(frontState.displayState)}`);
+    await waitForStablePaint("front");
     let frontRect = frontState.rect;
     if (frontRect && frontState.relativeToFrame) {
       const frameRect = await bigCoachView.webContents.executeJavaScript(`(()=>{
@@ -534,22 +568,13 @@ async function prepareCardImages() {
         y: Math.floor(frontRect.y + frameRect.y)
       };
     }
-    const frontImage = await Promise.race([
-      frontRect
-        ? bigCoachView.webContents.capturePage(frontRect)
-        : bigCoachView.webContents.capturePage(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("問題面の画像撮影が10秒でタイムアウトしました")), 10000))
-    ]);
+    const frontImage = await captureBigCoachPage(frontRect, "front");
     log("card capture: front captured");
     log("card capture: preparing back");
-    await ensureCardCaptureVisualState("back");
-    await waitForStablePaint("back");
     backState = await executeAdapter("window.__bigcoachDesktop.prepareCapture('back')");
     log(`card capture: back verified ${JSON.stringify(backState.displayState)}`);
-    const backImage = await Promise.race([
-      bigCoachView.webContents.capturePage(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("解答面の画像撮影が10秒でタイムアウトしました")), 10000))
-    ]);
+    await waitForStablePaint("back");
+    const backImage = await captureBigCoachPage(null, "back");
     log("card capture: back captured");
     currentCardImages = {
       frontDataUrl: frontImage.toDataURL(),
@@ -567,37 +592,67 @@ async function prepareCardImages() {
     const restored = await executeAdapter(
       `window.__bigcoachDesktop.restoreCapture(${JSON.stringify(finalDisplayState)})`
     );
-    if (!restored.showMortal || restored.showHands ||
-        !restored.visualState.aiBarsVisible ||
-        !restored.visualState.aiAdviceVisible ||
-        !restored.visualState.opponentsHidden) {
-      throw new Error("カード画像撮影後にAI評価表示・他家手牌非表示へ戻せませんでした");
+    if (restored.showHands || !restored.visualState.opponentsHidden) {
+      throw new Error("カード画像撮影後に手牌表示OFFへ戻せませんでした。");
     }
-    if (currentCardImages?.captureDiagnostics) {
-      currentCardImages.captureDiagnostics.final = restored;
-    }
+    if (currentCardImages?.captureDiagnostics) currentCardImages.captureDiagnostics.final = restored;
     log(`card capture: restored normal display ${JSON.stringify(restored)}`);
   }
 }
 
-async function prepareNanikiruReferenceImage() {
+async function captureCurrentBigCoachImage() {
   await ensureAdapter();
-  const restored = await executeAdapter(
-    "window.__bigcoachDesktop.restoreCapture({showMortal:true,showHands:false})"
-  );
-  if (!restored?.visualState?.aiAdviceVisible || !restored?.visualState?.opponentsHidden) {
-    throw new Error("何切る悪手カード用のBigCoach参考表示を準備できませんでした");
-  }
   bigCoachView.webContents.invalidate();
   await new Promise((resolve) => setTimeout(resolve, 250));
-  const image = await bigCoachView.webContents.capturePage();
+  const image = await captureBigCoachPage(null, "current");
   return image.toDataURL();
+}
+
+async function prepareRiskReadingFrontImage() {
+  await ensureAdapter();
+  await executeAdapter("window.__bigcoachDesktop.closeOverlays()");
+  const finalDisplayState = { showMortal: true, showHands: false };
+  try {
+    const frontState = await executeAdapter("window.__bigcoachDesktop.prepareCapture('front')");
+    await waitForStablePaint("front");
+    let frontRect = frontState.rect;
+    if (frontRect && frontState.relativeToFrame) {
+      const frameRect = await bigCoachView.webContents.executeJavaScript(`(()=>{
+        const frame=document.querySelector("iframe[title='Analysis Result'],iframe[title='Classic Analysis Result']");
+        if(!frame)return null;
+        const rect=frame.getBoundingClientRect();
+        return {x:rect.x,y:rect.y};
+      })()`, true);
+      if (frameRect) frontRect = {
+        ...frontRect,
+        x: Math.floor(frontRect.x + frameRect.x),
+        y: Math.floor(frontRect.y + frameRect.y)
+      };
+    }
+    const image = await captureBigCoachPage(frontRect, "risk-front");
+    return image.toDataURL();
+  } finally {
+    await executeAdapter(
+      `window.__bigcoachDesktop.restoreCapture(${JSON.stringify(finalDisplayState)})`
+    ).catch((error) => log(`risk reading capture restore failed: ${error.stack || error}`));
+  }
 }
 
 function cardVisualStateMatches(mode, state) {
   return mode === "front"
     ? !state.aiBarsVisible && !state.aiAdviceVisible && state.opponentsHidden
-    : state.aiBarsVisible && state.aiAdviceVisible && state.opponentsRevealed;
+    : ((state.aiBarsVisible && state.aiAdviceVisible) ||
+        (state.aiDisplayChecked && state.noAnalysisDataVisible)) && state.opponentsRevealed;
+}
+
+function cardVisualStateSignature(state) {
+  return JSON.stringify({
+    aiBarsVisible: Boolean(state?.aiBarsVisible),
+    aiAdviceVisible: Boolean(state?.aiAdviceVisible),
+    noAnalysisDataVisible: Boolean(state?.noAnalysisDataVisible),
+    opponentsRevealed: Boolean(state?.opponentsRevealed),
+    opponentsHidden: Boolean(state?.opponentsHidden)
+  });
 }
 
 async function waitForStablePaint(mode) {
@@ -610,62 +665,20 @@ async function waitForStablePaint(mode) {
   await new Promise((resolve) => setTimeout(resolve, 150));
   const second = await executeAdapter("window.__bigcoachDesktop.captureVisualState()");
   if (!cardVisualStateMatches(mode, first) || !cardVisualStateMatches(mode, second) ||
-      JSON.stringify(first) !== JSON.stringify(second)) {
+      cardVisualStateSignature(first) !== cardVisualStateSignature(second)) {
     throw new Error(
-      `${mode === "front" ? "問題面" : "解答面"}の描画が安定していません。` +
-      "BigCoachの表示更新完了後にもう一度お試しください。"
+      `${mode} card rendering is not stable. ` +
+      "Please try again after BigCoach finishes updating the display."
     );
   }
   log(`card capture: ${mode} compositor stable ${JSON.stringify(second)}`);
   return second;
 }
 
-async function ensureCardCaptureVisualState(mode) {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    log(`card capture: ${mode} render attempt ${attempt + 1}`);
-    const renderResult = await executeAdapter(
-      `window.__bigcoachDesktop.renderCaptureMode(${JSON.stringify(mode)})`
-    );
-    log(`card capture: ${mode} render requested`);
-    if (!renderResult.ok) throw new Error(renderResult.reason);
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    log(`card capture: ${mode} inspecting DOM`);
-    const state = await executeAdapter("window.__bigcoachDesktop.captureVisualState()");
-    log(`card capture: ${mode} DOM ${JSON.stringify(state)}`);
-    const matches = cardVisualStateMatches(mode, state);
-    if (matches) return state;
-  }
-  const state = await executeAdapter("window.__bigcoachDesktop.captureVisualState()");
-  throw new Error(
-    `${mode === "front" ? "問題面" : "解答面"}の実表示を準備できませんでした。` +
-    `AI棒グラフ=${state.aiBarsVisible ? "表示" : "非表示"}、` +
-    `AI候補表=${state.aiAdviceVisible ? "表示" : "非表示"}、` +
-    `相手手牌=${state.opponentsRevealed ? "表向き" : state.opponentsHidden ? "裏向き" : "判定不能"}`
-  );
-}
-
 function judgmentPrompt(scene) {
   if (scene.judgmentType === "call") return "副露？";
   if (scene.judgmentType === "riichi") return "リーチ？";
   return "何切？";
-}
-
-function outcomeProbabilitiesHtml(outcomes) {
-  const items = [
-    ["流局確率", outcomes?.draw],
-    ["横移動確率", outcomes?.movement],
-    ["放銃確率", outcomes?.dealIn],
-    ["和了確率", outcomes?.win]
-  ];
-  if (items.every(([, value]) => !Number.isFinite(value))) {
-    return `<p>BigCoachの局面結果確率を取得できませんでした。</p>`;
-  }
-  return `<div style="display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:8px;margin:12px 0">
-    ${items.map(([label, value]) => `<div style="padding:10px;border:1px solid #ddd;border-radius:8px;text-align:center">
-      <div style="font-size:13px">${label}</div>
-      <strong style="font-size:22px">${Number.isFinite(value) ? `${value.toFixed(1)}%` : "—"}</strong>
-    </div>`).join("")}
-  </div>`;
 }
 
 function cardHtml(scene, simulation, memo, images, mediaMode = "preview") {
@@ -680,228 +693,393 @@ function cardHtml(scene, simulation, memo, images, mediaMode = "preview") {
     <div class="bigcoach-card">
       <h2>メモ</h2><div>${escapeHtml(memo || "（なし）").replace(/\n/g, "<br>")}</div>
       <img src="${escapeHtml(images.back)}" style="max-width:100%">
-      ${outcomeProbabilitiesHtml(images.outcomes)}
       <h2>何切る比較</h2>
       <p>実打: ${tileHtml(comparison.actual, mediaMode)} / BigCoach推奨: ${tileHtml(comparison.bigCoach, mediaMode)} / シミュレーター推奨: ${tileHtml(comparison.simulator, mediaMode)}</p>
       <p>BigCoachとシミュレーター: <strong>${comparison.bigCoachMatchesSimulator ? "一致" : "不一致"}</strong></p>
       <p>シン悪手: ${scene.shinMistake.isShin ? "該当" : "非該当"} (${escapeHtml(scene.shinMistake.reason)})</p>
       <p>大悪手: ${scene.majorMistake?.isMajor ? "該当" : "非該当"} (${escapeHtml(scene.majorMistake?.reason || "判定不可")})</p>
       ${candidateTable("何切る結果（見えている牌を残り枚数から除外）", simulation?.withWall, mediaMode)}
-      ${candidateTable("何切る結果（残り枚数を補正しない）", simulation?.withoutWall, mediaMode)}
-      <hr><p><a href="${escapeHtml(scene.url)}">BigCoach解析結果</a></p>
-      <p>局面ID: ${escapeHtml(scene.sceneId)}</p>
+      ${candidateTable("何切る結果（補正なし）", simulation?.withoutWall, mediaMode)}
+      <hr><p><a href="${escapeHtml(scene.url)}">BigCoach隗｣譫千ｵ先棡</a></p>
+      <p>螻髱｢ID: ${escapeHtml(scene.sceneId)}</p>
     </div>`;
   return { front, back, comparison };
+}
+
+async function ankiDeckChoices(fallbackDeckName) {
+  const decks = await anki.listDecks().catch(() => []);
+  const selectedDeck = fallbackDeckName || settings.deckName;
+  return {
+    decks: [...new Set([selectedDeck, ...decks].filter(Boolean))],
+    deckName: selectedDeck
+  };
+}
+
+function riskOpponent(scene, targetKey) {
+  const opponents = scene?.dealInRisk?.opponents || [];
+  return opponents.find((item) => item.key === targetKey) || null;
+}
+
+function riskRatePercent(rate) {
+  return `${(Number(rate || 0) * 100).toFixed(2)}%`;
+}
+
+const RISK_TILE_CODES_34 = [
+  "1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m",
+  "1p", "2p", "3p", "4p", "5p", "6p", "7p", "8p", "9p",
+  "1s", "2s", "3s", "4s", "5s", "6s", "7s", "8s", "9s",
+  "1z", "2z", "3z", "4z", "5z", "6z", "7z"
+];
+
+const RISK_TABLE_COLUMNS = [
+  "スジ19", "スジ2378", "片スジ456", "両スジ456", "無スジ19", "無スジ2378", "無スジ456",
+  "1枚見えオタ風", "2枚見えオタ風", "3枚見えオタ風", "1枚見え役牌", "2枚見え役牌", "3枚見え役牌"
+];
+
+const RISK_TABLE_ROWS = [
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"],
+  ["~5%", "~10%", "~10%", "~5%", "~10%", "~10%", "~15%", "~5%", "~5%", "~5%", "~10%", "~5%", "~5%"]
+];
+
+function riskTableValue(turn, category) {
+  const row = RISK_TABLE_ROWS[Math.max(1, Math.min(18, Number(turn || 1))) - 1];
+  const index = RISK_TABLE_COLUMNS.indexOf(category);
+  return index >= 0 ? riskRange(row[index]) : null;
+}
+
+function tileIndex34(code) {
+  const normalized = code?.[0] === "0" ? `5${code[1]}` : code;
+  return RISK_TILE_CODES_34.indexOf(normalized);
+}
+
+function windOffset(wind) {
+  return { "1z": 0, "2z": 1, "3z": 2, "4z": 3 }[wind] ?? 0;
+}
+
+function targetSeatWind(scene, opponent) {
+  const base = windOffset(scene.seatWind);
+  const offset = { shimocha: 1, toimen: 2, kamicha: 3 }[opponent.key] ?? Number(opponent.seat || 0);
+  return `${((base + offset) % 4) + 1}z`;
+}
+
+function visibleCounts(scene) {
+  const counts = new Map();
+  const tiles = [
+    ...(scene.handTiles || []),
+    ...(scene.doraTiles || []),
+    ...(scene.riverTiles || []),
+    ...(scene.callTiles || [])
+  ];
+  for (const tile of tiles) {
+    const normalized = tile?.[0] === "0" ? `5${tile[1]}` : tile;
+    if (normalized) counts.set(normalized, (counts.get(normalized) || 0) + 1);
+  }
+  return counts;
+}
+
+function genbutsuTiles(scene, opponent) {
+  const absoluteSeat = relativeSeatToAbsolute(scene, opponent.seat);
+  const fromRiver = new Set((scene.discardsBySeat?.[absoluteSeat] || [])
+    .map((tile) => tile?.[0] === "0" ? `5${tile[1]}` : tile)
+    .filter(Boolean));
+  const opponentIndex = (scene.dealInRisk?.opponents || []).findIndex((item) => item.key === opponent.key);
+  const fromBigCoach = new Set((scene.dealInRisk?.genbutsu?.[opponentIndex] || [])
+    .map((index) => RISK_TILE_CODES_34[Number(index)])
+    .filter(Boolean));
+  return new Set([...fromRiver, ...fromBigCoach]);
+}
+
+function riskCategoryForTile(tile, scene, opponent, genbutsu, counts) {
+  const normalized = tile?.[0] === "0" ? `5${tile[1]}` : tile;
+  if (!normalized) return null;
+  if (genbutsu.has(normalized)) return "現物";
+  const number = Number(normalized[0]);
+  const suit = normalized[1];
+  if (suit === "z") {
+    const visible = Math.max(1, Math.min(3, counts.get(normalized) || 0));
+    const yakuhai = ["5z", "6z", "7z", scene.roundWind, targetSeatWind(scene, opponent)].includes(normalized);
+    return `${visible}枚見え${yakuhai ? "役牌" : "オタ風"}`;
+  }
+  const has = (n) => genbutsu.has(`${n}${suit}`);
+  if ([1, 2, 3, 7, 8, 9].includes(number)) {
+    const target = number <= 3 ? number + 3 : number - 3;
+    const suji = has(target);
+    if (number === 1 || number === 9) return suji ? "繧ｹ繧ｸ19" : "辟｡繧ｹ繧ｸ19";
+    return suji ? "繧ｹ繧ｸ2378" : "辟｡繧ｹ繧ｸ2378";
+  }
+  if (number === 4 || number === 5 || number === 6) {
+    const left = has(number - 3);
+    const right = has(number + 3);
+    if (left && right) return "荳｡繧ｹ繧ｸ456";
+    if (left || right) return "迚・せ繧ｸ456";
+    return "辟｡繧ｹ繧ｸ456";
+  }
+  return null;
+}
+
+function buildRiskReadingProblem(scene, targetKey, threshold = 0.03) {
+  const opponent = riskOpponent(scene, targetKey);
+  if (!opponent) return null;
+  const counts = visibleCounts(scene);
+  const genbutsu = genbutsuTiles(scene, opponent);
+  const byTile = new Map((opponent.rates || []).map((item) => [item.tile, Number(item.rate || 0)]));
+  const items = RISK_TILE_CODES_34.map((tile) => {
+    const category = riskCategoryForTile(tile, scene, opponent, genbutsu, counts);
+    const expected = category ? riskTableValue(scene.currentTurn, category) : null;
+    const actual = byTile.get(tile) || 0;
+    const deviation = expected
+      ? Math.max(0, expected.min - actual, actual - expected.max)
+      : 0;
+    return {
+      tile,
+      category,
+      expected: category === "迴ｾ迚ｩ" ? { min: 0, max: 0, label: "迴ｾ迚ｩ" } : expected,
+      actual,
+      deviation,
+      isQuestion: Boolean(expected && category !== "迴ｾ迚ｩ" && deviation >= Number(threshold || 0))
+    };
+  }).filter((item) => item.category && item.expected);
+  return {
+    opponent,
+    items,
+    questions: items.filter((item) => item.isQuestion),
+    threshold: Number(threshold || 0),
+    turn: Math.max(1, Math.min(18, Number(scene.currentTurn || 1)))
+  };
+}
+
+function riskProblemTableHtml(problem, mediaMode = "preview", showActual = false) {
+  const questions = problem.questions || [];
+  const questionSummary = questions.length ? `
+    <div class="risk-question-summary">
+      <div class="risk-question-summary-title">蜃ｺ鬘・/div>
+      <div class="risk-question-strip">
+        ${questions.map((item) => `
+          <div class="risk-question-card ${riskRowBand(item)}">
+            <div class="risk-question-tile">${tileHtml(item.tile, mediaMode)}</div>
+          </div>`).join("")}
+      </div>
+    </div>
+  ` : "";
+  const suits = [
+    ["m", ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m"]],
+    ["p", ["1p", "2p", "3p", "4p", "5p", "6p", "7p", "8p", "9p"]],
+    ["s", ["1s", "2s", "3s", "4s", "5s", "6s", "7s", "8s", "9s"]],
+    ["z", ["1z", "2z", "3z", "4z", "5z", "6z", "7z"]]
+  ];
+  const itemByTile = new Map(problem.items.map((item) => [item.tile, item]));
+  const rows = suits.map(([label, tiles]) => `
+    <div class="risk-suit-row">
+      <div class="risk-suit-cells">
+        ${tiles.map((tile) => {
+          const item = itemByTile.get(tile);
+          if (!item) {
+            return `<div class="risk-suit-cell empty"><div class="risk-suit-tile">${tileHtml(tile, mediaMode)}</div></div>`;
+          }
+          return `
+            <div class="risk-suit-cell ${riskRowBand(item)} ${item.isQuestion ? "risk-question" : ""}">
+              <div class="risk-suit-tile">${tileHtml(item.tile, mediaMode)}</div>
+              <div class="risk-suit-category">${escapeHtml(riskCategoryShort(item.category))}</div>
+              <div class="risk-suit-basis">${escapeHtml(riskRangeShort(item.expected))}</div>
+              <div class="risk-suit-actual">${item.isQuestion ? "出題" : (showActual ? riskRatePercent(item.actual) : "")}</div>
+            </div>`;
+        }).join("")}
+      </div>
+    </div>`).join("");
+  return `${questionSummary}
+  <div class="risk-suit-table">${rows}</div>`;
+}
+
+function riskHeatmapHtml(opponent, mediaMode = "preview") {
+  const groups = [
+    ["萬子", ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m"]],
+    ["筒子", ["1p", "2p", "3p", "4p", "5p", "6p", "7p", "8p", "9p"]],
+    ["索子", ["1s", "2s", "3s", "4s", "5s", "6s", "7s", "8s", "9s"]],
+    ["字牌", ["1z", "2z", "3z", "4z", "5z", "6z", "7z"]]
+  ];
+  const byTile = new Map((opponent?.rates || []).map((item) => [item.tile, Number(item.rate || 0)]));
+  const genbutsu = new Set((opponent?.genbutsu || []).map((index) => RISK_TILE_CODES_34[Number(index)]).filter(Boolean));
+  const cell = (tile) => {
+    const rate = byTile.get(tile) || 0;
+    const band = riskRateBand(rate);
+    const palette = {
+      "band-5": { background: "#1e4f38", color: "#f2fff8", label: "~5%" },
+      "band-10": { background: "#5d7a22", color: "#f8ffef", label: "~10%" },
+      "band-15": { background: "#a06b16", color: "#fff7ea", label: "~15%" },
+      "band-20": { background: "#b84d1d", color: "#fff4ea", label: "~20%" },
+      "band-20p": { background: "#8e2430", color: "#fff2f4", label: "20%~" }
+    }[band];
+    const badge = genbutsu.has(tile) ? `<div class="risk-heatmap-genbutsu">迴ｾ迚ｩ</div>` : "";
+    return `<td style="text-align:center;background:${palette.background};color:${palette.color};border:1px solid #ddd;padding:5px">
+      <div>${tileHtml(tile, mediaMode)}</div>
+      <strong style="display:block;font-size:13px">${riskRatePercent(rate)}</strong>
+      ${badge}
+    </td>`;
+  };
+  return `<div class="risk-heatmap">
+    ${groups.map(([label, tiles]) => `<h3>${label}</h3>
+      <table style="width:auto;border-collapse:collapse;margin-bottom:10px"><tbody><tr>
+        ${tiles.map(cell).join("")}
+      </tr></tbody></table>`).join("")}
+  </div>`;
+}
+
+function riskReadingCardHtml(scene, frontImage, targetKey, memo, mediaMode = "preview") {
+  const problem = buildRiskReadingProblem(scene, targetKey, settings.riskReadingDeviationThreshold);
+  if (!problem?.opponent) {
+    throw new Error("この局面から指定した相手の放銃危険度を取得できませんでした。");
+  }
+  if (!problem.questions.length) {
+    throw new Error("設定した乖離幅以上にテーブルから外れた牌がありません。");
+  }
+  const opponent = problem.opponent;
+  const structured = {
+    schema: "bigcoach-risk-reading/v1",
+    sceneId: scene.sceneId,
+    sourceUrl: scene.url,
+    target: { key: opponent.key, label: opponent.label, seat: opponent.seat },
+    threshold: problem.threshold,
+    questions: problem.questions,
+    classifiedTiles: problem.items,
+    allOpponents: scene.dealInRisk?.opponents || [],
+    roundText: scene.roundText,
+    turn: scene.currentTurn,
+    handMpsz: scene.handMpsz
+  };
+  const questionText = problem.questions.map((item) =>
+    `${item.tile}（${item.category} / 表: ${item.expected.label}）`).join("、");
+  const front = `
+    <div class="bigcoach-risk-card" data-schema="bigcoach-risk-reading/v1" data-scene-id="${escapeHtml(scene.sceneId)}">
+      <h2 style="text-align:center">蜊ｱ髯ｺ蠎ｦ隱ｭ縺ｿ: ${escapeHtml(opponent.label)}</h2>
+      <p><strong>${escapeHtml(opponent.label)}縺ｸ縺ｮ謾ｾ驫・紫縺瑚｡ｨ縺ｮ蝓ｺ貅悶°繧牙､悶ｌ縺ｦ縺・ｋ迚後ｒ隱ｭ繧縲・/strong></p>
+      <img src="${escapeHtml(frontImage)}" style="max-width:100%">
+      <h2>陦ｨ縺九ｉ蜿ら・縺励◆蝓ｺ貅・/h2>
+      <div class="risk-table-note">陦ｨ縺ｮ蝓ｺ貅・ ~5%, ~10%, ~15%, ~20%, 20%~</div>
+      ${riskProblemTableHtml(problem, mediaMode, false)}
+    </div>`;
+  const back = `
+    <div class="bigcoach-risk-card" data-schema="bigcoach-risk-reading/v1" data-scene-id="${escapeHtml(scene.sceneId)}">
+      <h2>蜊ｱ髯ｺ蠎ｦ隱ｭ縺ｿ: ${escapeHtml(opponent.label)}</h2>
+      <div style="margin-bottom:10px">${escapeHtml(memo || "").replace(/\n/g, "<br>")}</div>
+      <img src="${escapeHtml(frontImage)}" style="max-width:100%">
+      <h2>蝓ｺ貅冶｡ｨ縺ｨ螳滓ｸｬ謾ｾ驫・紫</h2>
+      <div class="risk-table-note">陦ｨ縺ｮ蝓ｺ貅・ ~5%, ~10%, ~15%, ~20%, 20%~</div>
+      ${riskProblemTableHtml(problem, mediaMode, true)}
+      <h2>逕溘・謾ｾ驫・些髯ｺ蠎ｦ繝偵・繝医・繝・・</h2>
+      ${riskHeatmapHtml(opponent, mediaMode)}
+      <details><summary>蜉蟾･逕ｨJSON</summary><pre data-format="bigcoach-risk-reading/v1">${escapeHtml(JSON.stringify(structured))}</pre></details>
+      <p><a href="${escapeHtml(scene.url)}">BigCoach隗｣譫千ｵ先棡</a> ・・螻髱｢ID: ${escapeHtml(scene.sceneId)}</p>
+    </div>`;
+  return { front, back, structured, opponent };
+}
+
+async function storeRiskReadingTileMedia(scene) {
+  const codes = new Set((scene.dealInRisk?.opponents || [])
+    .flatMap((opponent) => opponent.rates || [])
+    .map((item) => item.tile)
+    .filter((code) => safeTileFilename(code)));
+  return Promise.all([...codes].map((code) => {
+    const filename = safeTileFilename(code);
+    const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
+    return anki.storeMedia(`bigcoach_tile_${filename}`, data);
+  }));
+}
+
+async function registerRiskReadingCard(payload = {}) {
+  const scene = await captureScene();
+  const target = payload.target || "kamicha";
+  const opponent = riskOpponent(scene, target);
+  if (!opponent) {
+    throw new Error("BigCoachの放銃危険度ヒートマップを取得できませんでした。解析結果画面で局面を表示してから再試行してください。");
+  }
+  const cached = currentRiskReadingPreview?.sceneId === scene.sceneId &&
+    currentRiskReadingPreview?.target === target
+    ? currentRiskReadingPreview
+    : await previewRiskReadingCard(payload);
+  const frontDataUrl = cached.frontDataUrl;
+  const frontName = await anki.storeImage(frontDataUrl, `${scene.sceneId}_${target}`, "risk_front");
+  await storeRiskReadingTileMedia(scene);
+  const dedicatedSettings = {
+    ...settings,
+    deckName: payload.deckName || settings.riskReadingDeckName || `${settings.deckName}::RiskReading`
+  };
+  const riskScene = {
+    ...scene,
+    sceneId: `${scene.sceneId}_${target}`
+  };
+  const html = riskReadingCardHtml(
+    scene,
+    frontName,
+    target,
+    payload.memo || settings.riskReadingNote || "",
+    "anki"
+  );
+  const registration = await anki.add({
+    settings: dedicatedSettings,
+    scene: riskScene,
+    frontHtml: html.front,
+    backHtml: html.back,
+    duplicateMode: payload.duplicateMode || "skip",
+    duplicatePrefix: "BigCoach_RiskReading_ID",
+    extraTags: ["RiskReading", "BigCoach_RiskReading", `Risk_${opponent.key}`]
+  });
+  return { ...registration, deckName: dedicatedSettings.deckName, opponent, riskReading: html.structured };
+}
+
+async function previewRiskReadingCard(payload = {}) {
+  const scene = await captureScene();
+  const target = payload.target || "kamicha";
+  const opponent = riskOpponent(scene, target);
+  if (!opponent) {
+    throw new Error("BigCoachの放銃危険度ヒートマップを取得できませんでした。解析結果画面で局面を表示してから再試行してください。");
+  }
+  const frontDataUrl = currentCardImages?.frontDataUrl || await prepareRiskReadingFrontImage();
+  const html = riskReadingCardHtml(
+    scene,
+    frontDataUrl,
+    target,
+    payload.memo || settings.riskReadingNote || "",
+    "preview"
+  );
+  currentRiskReadingPreview = {
+    sceneId: scene.sceneId,
+    target,
+    memo: payload.memo || "",
+    frontDataUrl,
+    html
+  };
+  const duplicates = await anki.findDuplicates(`${scene.sceneId}_${target}`, "BigCoach_RiskReading_ID").catch(() => []);
+  const deckChoices = await ankiDeckChoices(settings.riskReadingDeckName || `${settings.deckName}::RiskReading`);
+  return {
+    ...html,
+    scene,
+    duplicates,
+    frontDataUrl,
+    deckName: deckChoices.deckName,
+    decks: deckChoices.decks
+  };
 }
 
 function tileRowHtml(codes, mediaMode = "preview", height = 54) {
   return `<div style="display:flex;flex-wrap:wrap;gap:2px;align-items:flex-end">${
     (codes || []).map((code) => tileHtml(code, mediaMode).replace("height:38px", `height:${height}px`)).join("")
   }</div>`;
-}
-
-function tileStripSvg(codes) {
-  const tiles = codes || [];
-  const tileWidth = 66;
-  const tileHeight = 90;
-  const images = tiles.map((code, index) => {
-    const filename = tileFilename(code);
-    const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
-    return `<image x="${index * tileWidth}" y="0" width="${tileWidth}" height="${tileHeight}" href="data:image/png;base64,${data}"/>`;
-  }).join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${tileWidth * tiles.length}" height="${tileHeight}" viewBox="0 0 ${tileWidth * tiles.length} ${tileHeight}">${images}</svg>`;
-}
-
-function tileStripAsset(codes, sceneId, mediaMode = "preview") {
-  const svg = tileStripSvg(codes);
-  const data = Buffer.from(svg, "utf8").toString("base64");
-  const filename = `bigcoach_hand_${sceneId}.svg`;
-  return {
-    filename,
-    data,
-    src: mediaMode === "anki" ? filename : `data:image/svg+xml;base64,${data}`
-  };
-}
-
-function nanikiruMistakeCardHtml(scene, simulation, screenshot, mediaMode = "preview", handStripSrc = null) {
-  const classification = classifyNanikiruMistake(scene, simulation);
-  const handImage = handStripSrc || tileStripAsset(scene.handTiles, scene.sceneId, mediaMode).src;
-  const structured = {
-    schema: "bigcoach-nanikiru-mistake/v1",
-    sceneId: scene.sceneId,
-    sourceUrl: scene.url,
-    handMpsz: scene.handMpsz,
-    handTiles: scene.handTiles,
-    selfCallMpsz: codesToMpsz(scene.selfCallTiles),
-    selfCallTiles: scene.selfCallTiles,
-    doraIndicatorsMpsz: codesToMpsz(scene.doraTiles),
-    doraIndicators: scene.doraTiles,
-    turn: scene.currentTurn,
-    opponentRiichi: scene.opponentRiichi,
-    opponentCallTiles: scene.opponentCallTiles,
-    roundWind: scene.roundWind,
-    seatWind: scene.seatWind,
-    roundText: scene.roundText,
-    actualDiscard: scene.actualDiscard,
-    recommendedDiscard: scene.recommendedDiscard,
-    simulatorWithRiverAdjustment: simulation.withWall.recommendation,
-    simulatorWithoutRiverAdjustment: simulation.withoutWall.recommendation,
-    simulatorWithoutRiverAdjustmentCandidates: simulation.withoutWall.candidates,
-    shanten: scene.shanten
-  };
-  const dataJson = JSON.stringify(structured);
-  const commonData = `data-schema="bigcoach-nanikiru-mistake-v1" data-scene-id="${escapeHtml(scene.sceneId)}" data-hand-mpsz="${escapeHtml(scene.handMpsz)}"`;
-  const front = `
-    <div class="nanikiru-flat-card" ${commonData}>
-      <h2 style="text-align:center">何切る？</h2>
-      <div style="display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:8px;margin-bottom:12px">
-        <div><small>場風</small>${tileRowHtml([scene.roundWind], mediaMode, 42)}</div>
-        <div><small>自風</small>${tileRowHtml([scene.seatWind], mediaMode, 42)}</div>
-        <div><small>巡目</small><strong style="display:block;font-size:24px">${scene.currentTurn}巡目</strong></div>
-        <div><small>ドラ表示牌</small>${tileRowHtml(scene.doraTiles, mediaMode, 42)}</div>
-      </div>
-      <img src="${escapeHtml(handImage)}" alt="${escapeHtml(scene.handMpsz)}" data-hand-mpsz="${escapeHtml(scene.handMpsz)}"
-        style="display:block;width:auto;max-width:100%;height:auto;white-space:nowrap">
-      ${scene.selfCallTiles?.length ? `<div style="margin-top:8px"><small>副露</small>${tileRowHtml(scene.selfCallTiles, mediaMode, 46)}</div>` : ""}
-    </div>`;
-  const back = `
-    <div class="nanikiru-flat-card" ${commonData}>
-      <h2>正解: ${tileHtml(scene.recommendedDiscard, mediaMode)}</h2>
-      <p>実打: ${tileHtml(scene.actualDiscard, mediaMode)} ／ AI: ${tileHtml(scene.recommendedDiscard, mediaMode)}
-      ／ 河補正あり: ${tileHtml(simulation.withWall.recommendation, mediaMode)}
-      ／ 河補正なし: ${tileHtml(simulation.withoutWall.recommendation, mediaMode)}</p>
-      <p>手牌mpsz: <code>${escapeHtml(scene.handMpsz)}</code></p>
-      <p>副露mpsz: <code>${escapeHtml(codesToMpsz(scene.selfCallTiles))}</code></p>
-      <p>ドラ表示牌mpsz: <code>${escapeHtml(codesToMpsz(scene.doraTiles))}</code></p>
-      <p>${escapeHtml(scene.roundText)} ／ ${scene.currentTurn}巡目 ／ 場風${escapeHtml(scene.roundWind)} ／ 自風${escapeHtml(scene.seatWind)}
-      ／ ${escapeHtml(String(scene.shanten))}シャンテン</p>
-      ${candidateTable(
-        "補正無の何切る結果（河・副露を残り枚数へ反映しない）",
-        simulation.withoutWall,
-        mediaMode
-      )}
-      <details><summary>加工用JSON</summary><pre data-format="bigcoach-nanikiru-mistake-v1">${escapeHtml(dataJson)}</pre></details>
-      <h3>BigCoach参考画像</h3>
-      <img src="${escapeHtml(screenshot)}" style="max-width:100%">
-      <p><a href="${escapeHtml(scene.url)}">BigCoach解析結果</a> ／ 局面ID: ${escapeHtml(scene.sceneId)}</p>
-      <p>${escapeHtml(classification.reason)}</p>
-    </div>`;
-  return { front, back, structured, classification };
-}
-
-async function storeTileMediaForNanikiru(scene, simulation) {
-  const codes = new Set([
-    ...scene.handTiles,
-    ...scene.selfCallTiles,
-    ...scene.doraTiles,
-    scene.roundWind,
-    scene.seatWind,
-    scene.actualDiscard,
-    scene.recommendedDiscard,
-    simulation?.withWall?.recommendation,
-    simulation?.withoutWall?.recommendation,
-    ...(simulation?.withoutWall?.candidates || []).flatMap((candidate) => [
-      candidate.tile,
-      ...(candidate.ukeire || []).map((item) => item.tile)
-    ])
-  ].filter((code) => safeTileFilename(code)));
-  for (const code of codes) {
-    const filename = safeTileFilename(code);
-    if (!filename) continue;
-    const data = fs.readFileSync(path.join(tileImagesDirectory(), filename)).toString("base64");
-    await anki.storeMedia(`bigcoach_tile_${filename}`, data);
-  }
-}
-
-async function registerNanikiruMistakeCard(scene, simulation, screenshotDataUrl, duplicateMode = "skip") {
-  await storeTileMediaForNanikiru(scene, simulation);
-  const screenshotName = await anki.storeImage(screenshotDataUrl, scene.sceneId, "nanikiru");
-  const handStrip = tileStripAsset(scene.handTiles, scene.sceneId, "anki");
-  await anki.storeMedia(handStrip.filename, handStrip.data);
-  const flat = nanikiruMistakeCardHtml(
-    scene,
-    simulation,
-    screenshotName,
-    "anki",
-    handStrip.src
-  );
-  const dedicatedSettings = {
-    ...settings,
-    deckName: settings.nanikiruMistakeDeckName || `${settings.deckName}::何切る悪手`
-  };
-  const registration = await anki.add({
-    settings: dedicatedSettings,
-    scene,
-    frontHtml: flat.front,
-    backHtml: flat.back,
-    duplicateMode,
-    duplicatePrefix: "BigCoach_NanikiruMistake_ID",
-    extraTags: ["何切る悪手", "BigCoach_何切る悪手"]
-  });
-  return { registration, deckName: dedicatedSettings.deckName, flat };
-}
-
-async function bulkRegisterNanikiruMistakes() {
-  const decisions = prefilterNanikiruDecisions(await loadDecisions()).sort(comparePosition);
-  const original = currentScene?.sourcePosition || (await captureScene()).sourcePosition;
-  const summary = {
-    candidates: decisions.length,
-    qualified: 0,
-    added: 0,
-    updated: 0,
-    skipped: 0,
-    failed: []
-  };
-  try {
-    for (let index = 0; index < decisions.length; index += 1) {
-      const decision = decisions[index];
-      mainWindow?.webContents.send("nanikiru:bulk-progress", {
-        current: index + 1,
-        total: decisions.length,
-        roundText: decision.roundText,
-        turn: decision.turn
-      });
-      try {
-        const evaluated = await evaluateNanikiruDecision(decision);
-        if (!evaluated.classification.isNanikiruMistake) continue;
-        summary.qualified += 1;
-        const duplicates = await anki.findDuplicates(
-          evaluated.scene.sceneId,
-          "BigCoach_NanikiruMistake_ID"
-        );
-        if (duplicates.length) {
-          summary.skipped += 1;
-          continue;
-        }
-        const scene = await goToDecision(decision);
-        scene.nanikiruMistake = evaluated.classification;
-        const screenshot = await prepareNanikiruReferenceImage();
-        const result = await registerNanikiruMistakeCard(
-          scene,
-          evaluated.simulation,
-          screenshot,
-          "skip"
-        );
-        if (result.registration.updated) summary.updated += 1;
-        else if (result.registration.skipped) summary.skipped += 1;
-        else summary.added += 1;
-      } catch (error) {
-        summary.failed.push({
-          roundText: decision.roundText,
-          turn: decision.turn,
-          message: error.message
-        });
-        log(`nanikiru bulk registration failed at ${nanikiruPositionKey(decision)}: ${error.stack || error}`);
-      }
-    }
-  } finally {
-    if (original) await goToDecision(original).catch(() => {});
-    mainWindow?.webContents.send("nanikiru:bulk-progress", {
-      complete: true,
-      ...summary
-    });
-  }
-  return summary;
 }
 
 async function refreshStats() {
@@ -966,8 +1144,8 @@ async function diagnose() {
     const info = await anki.diagnose(settings);
     result.anki = {
       ok: info.deckExists && info.modelExists,
-      message: !info.deckExists ? `デッキ「${settings.deckName}」がありません` :
-        !info.modelExists ? `ノートタイプ「${settings.modelName}」がありません` : "AnkiConnect利用可",
+      message: !info.deckExists ? `繝・ャ繧ｭ縲・{settings.deckName}縲阪′縺ゅｊ縺ｾ縺帙ｓ` :
+        !info.modelExists ? `繝弱・繝医ち繧､繝励・{settings.modelName}縲阪′縺ゅｊ縺ｾ縺帙ｓ` : "AnkiConnect蛻ｩ逕ｨ蜿ｯ",
       info
     };
   } catch (error) { result.anki.message = error.message; }
@@ -991,9 +1169,9 @@ function registerIpc() {
     currentScene = null;
     currentSimulation = null;
     currentCardImages = null;
+    currentRiskReadingPreview = null;
     currentDecisions = [];
-    currentNanikiruMistakes = null;
-    await bigCoachView.webContents.loadURL(url);
+    await loadBigCoachReviewUrl(url);
     const history = saveReviewHistory(url);
     return { url, history };
   });
@@ -1003,79 +1181,50 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle("simulator:run", async () => {
-    const scene = currentScene || await captureScene();
+    const scene = await captureScene();
     currentSimulation = await ensureSimulation(scene);
     return {
+      scene,
       simulation: currentSimulation,
-      comparison: comparisonStatus(scene, currentSimulation),
-      nanikiruMistake: scene.nanikiruMistake
+      comparison: comparisonStatus(scene, currentSimulation)
     };
   });
   ipcMain.handle("settings:save", (_event, next) => saveSettings(next));
   ipcMain.handle("app:diagnose", () => diagnose());
   ipcMain.handle("stats:refresh", () => refreshStats());
-  ipcMain.handle("anki:bulk-register-nanikiru", () => bulkRegisterNanikiruMistakes());
+  ipcMain.handle("anki:preview-risk-reading", (_event, payload) => previewRiskReadingCard(payload));
+  ipcMain.handle("anki:register-risk-reading", (_event, payload) => registerRiskReadingCard(payload));
   ipcMain.handle("anki:preview", async (_event, memo) => {
-    const scene = currentScene || await captureScene();
+    const scene = await captureScene();
     await ensureSimulation(scene);
     const images = currentCardImages || await prepareCardImages();
-    const nanikiruMistake = classifyNanikiruMistake(scene, currentSimulation);
-    const duplicates = await anki.findDuplicates(
-      scene.sceneId,
-      nanikiruMistake.isNanikiruMistake
-        ? "BigCoach_NanikiruMistake_ID"
-        : "BigCoach_ID"
-    ).catch(() => []);
-    const nanikiruMistakeCard = nanikiruMistake.isNanikiruMistake
-      ? nanikiruMistakeCardHtml(scene, currentSimulation, images.backDataUrl)
-      : null;
+    const duplicates = await anki.findDuplicates(scene.sceneId, "BigCoach_ID").catch(() => []);
+    const deckChoices = await ankiDeckChoices(settings.deckName);
     return {
+      scene,
       ...cardHtml(scene, currentSimulation, memo, {
         front: images.frontDataUrl,
-        back: images.backDataUrl,
-        outcomes: images.outcomes
+        back: images.backDataUrl
       }),
       duplicates,
+      decks: deckChoices.decks,
+      deckName: deckChoices.deckName,
       simulation: currentSimulation,
       comparison: comparisonStatus(scene, currentSimulation),
-      nanikiruMistake,
-      nanikiruMistakeCard,
       captureDiagnostics: images.captureDiagnostics
     };
   });
   ipcMain.handle("anki:register", async (_event, payload) => {
-    const scene = currentScene || await captureScene();
+    const scene = await captureScene();
     await ensureSimulation(scene);
     const images = currentCardImages || await prepareCardImages();
-    const classification = classifyNanikiruMistake(scene, currentSimulation);
-    if (classification.isNanikiruMistake) {
-      try {
-        const dedicated = await registerNanikiruMistakeCard(
-          scene,
-          currentSimulation,
-          images.backDataUrl,
-          payload.duplicateMode || "skip"
-        );
-        return {
-          ...dedicated.registration,
-          nanikiruMistake: {
-            qualified: true,
-            classification,
-            deckName: dedicated.deckName,
-            registration: dedicated.registration
-          }
-        };
-      } catch (error) {
-        throw new Error(`何切る悪手カードを登録できませんでした。${error.message}`);
-      }
-    }
     let frontName;
     let backName;
     try {
       frontName = await anki.storeImage(images.frontDataUrl, scene.sceneId, "front");
       backName = await anki.storeImage(images.backDataUrl, scene.sceneId, "back");
     } catch (error) {
-      throw new Error(`Ankiへ局面画像を送信できませんでした。${error.message}`);
+      throw new Error(`Anki邵ｺ・ｸ陞ｻﾂ鬮ｱ・｢騾包ｽｻ陷剃ｸ奇ｽ帝ｨｾ竏ｽ・ｿ・｡邵ｺ・ｧ邵ｺ髦ｪ竏ｪ邵ｺ蟶呻ｽ鍋ｸｺ・ｧ邵ｺ蜉ｱ笳・ｸｲ繝ｻ{error.message}`);
     }
     const tileCodes = new Set([
       scene.actualDiscard,
@@ -1098,27 +1247,26 @@ function registerIpc() {
         await anki.storeMedia(`bigcoach_tile_${filename}`, data);
       }
     } catch (error) {
-      throw new Error(`Ankiへ牌画像を送信できませんでした。${error.message}`);
+      throw new Error(`Anki邵ｺ・ｸ霑壽ｪ主愛陷剃ｸ奇ｽ帝ｨｾ竏ｽ・ｿ・｡邵ｺ・ｧ邵ｺ髦ｪ竏ｪ邵ｺ蟶呻ｽ鍋ｸｺ・ｧ邵ｺ蜉ｱ笳・ｸｲ繝ｻ{error.message}`);
     }
     try {
       const html = cardHtml(scene, currentSimulation, payload.memo || "", {
         front: frontName,
-        back: backName,
-        outcomes: images.outcomes
+        back: backName
       }, "anki");
-      const normalRegistration = await anki.add({
-        settings,
+      const registrationSettings = {
+        ...settings,
+        deckName: payload.deckName || settings.deckName
+      };
+      return await anki.add({
+        settings: registrationSettings,
         scene,
         frontHtml: html.front,
         backHtml: html.back,
         duplicateMode: payload.duplicateMode || "skip"
       });
-      return {
-        ...normalRegistration,
-        nanikiruMistake: { qualified: false, classification }
-      };
     } catch (error) {
-      throw new Error(`Ankiカード本体を登録できませんでした。${error.message}`);
+      throw new Error(`Anki郢ｧ・ｫ郢晢ｽｼ郢晉判謔ｽ闖ｴ阮呻ｽ帝具ｽｻ鬪ｭ・ｲ邵ｺ・ｧ邵ｺ髦ｪ竏ｪ邵ｺ蟶呻ｽ鍋ｸｺ・ｧ邵ｺ蜉ｱ笳・ｸｲ繝ｻ{error.message}`);
     }
   });
   ipcMain.handle("app:open-logs", () => shell.openPath(logPath));
@@ -1163,53 +1311,14 @@ async function createWindow() {
   await authSessionStore.restore();
   authSessionStore.start();
 
-  bigCoachView = new WebContentsView({
-    webPreferences: {
-      partition: "persist:bigcoach",
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
-    }
-  });
+  bigCoachView = createBigCoachView();
   mainWindow.contentView.addChildView(bigCoachView);
   layoutViews();
   mainWindow.on("resize", layoutViews);
-  bigCoachView.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("https://review.bigcoach.work")) {
-      bigCoachView.webContents.loadURL(url);
-      return { action: "deny" };
-    }
-    shell.openExternal(url);
-    return { action: "deny" };
-  });
-  bigCoachView.webContents.on("did-finish-load", async () => {
-    try {
-      const url = bigCoachView.webContents.getURL();
-      if (url.includes("/review/")) await ensureAdapter();
-      if (url !== loadedReviewUrl) {
-        currentDecisions = [];
-        currentNanikiruMistakes = null;
-        currentScene = null;
-        currentSimulation = null;
-        currentCardImages = null;
-        loadedReviewUrl = url;
-      }
-      const history = saveReviewHistory(url);
-      mainWindow.webContents.send("bigcoach:status", { ok: true, url, history });
-    } catch (error) {
-      log(error.stack || error);
-      mainWindow.webContents.send("bigcoach:status", { ok: false, message: error.message });
-    }
-  });
-  bigCoachView.webContents.on("did-frame-finish-load", (_event, isMainFrame) => {
-    if (!isMainFrame && bigCoachView.webContents.getURL().includes("/review/")) {
-      scheduleAutomaticStatsRefresh();
-    }
-  });
-  bigCoachView.webContents.on("did-fail-load", (_event, code, description) => {
-    mainWindow.webContents.send("bigcoach:status", { ok: false, message: `${description} (${code})` });
-  });
   await bigCoachView.webContents.loadURL(bigCoachUrl());
+  if (process.env.BIGCOACH_E2E_REVIEW_URL) {
+    await loadBigCoachReviewUrl(process.env.BIGCOACH_E2E_REVIEW_URL);
+  }
 }
 
 app.whenReady().then(async () => {

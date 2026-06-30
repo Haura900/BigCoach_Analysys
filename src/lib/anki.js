@@ -55,6 +55,10 @@ class AnkiService {
     };
   }
 
+  async listDecks() {
+    return this.invoke("deckNames");
+  }
+
   duplicateTag(sceneId, prefix = "BigCoach_ID") {
     return `${prefix}_${sceneId}`;
   }

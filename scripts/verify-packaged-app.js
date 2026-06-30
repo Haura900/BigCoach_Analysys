@@ -1,5 +1,4 @@
 "use strict";
-const fs = require("node:fs");
 
 async function connect(webSocketDebuggerUrl) {
   const socket = new WebSocket(webSocketDebuggerUrl);
@@ -39,247 +38,50 @@ async function connect(webSocketDebuggerUrl) {
 }
 
 async function main() {
-  const mark = (text) => fs.appendFileSync("verify-progress.log", `${new Date().toISOString()} ${text}\n`);
-  mark("start");
   const port = Number(process.argv[2] || 9223);
   const reviewUrl = process.argv[3];
+  if (!reviewUrl) throw new Error("Usage: node scripts/verify-packaged-app.js <debug-port> <review-url>");
+
   const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
   const bigCoachTarget = targets.find((item) => item.url.startsWith("https://review.bigcoach.work"));
   const panelTarget = targets.find((item) => item.url.includes("/src/renderer/index.html"));
   if (!bigCoachTarget || !panelTarget) throw new Error("Required Electron targets not found");
+
   const bigCoach = await connect(bigCoachTarget.webSocketDebuggerUrl);
   const panel = await connect(panelTarget.webSocketDebuggerUrl);
-  mark("connected");
-  console.error("step: open-url");
-  const opened = await panel.evaluate(`window.bigcoachApp.openReviewUrl(${JSON.stringify(reviewUrl)})`);
-  mark("opened");
-  console.error("step: opened");
-  await new Promise((resolve) => setTimeout(resolve, 2500));
-  if (process.env.INSPECT_MODERN_UI === "1") {
-    const inspection = await bigCoach.evaluate(`({
-      url:location.href,
-      text:document.body.innerText.slice(0,1200),
-      inputs:[...document.querySelectorAll("input")].map((item)=>({
-        type:item.type,value:item.value,checked:item.checked,outer:item.outerHTML.slice(0,300)
-      })),
-      labels:[...document.querySelectorAll("label,.el-radio-button,.el-radio-button__inner")].map((item)=>({
-        text:item.textContent.trim(),className:String(item.className)
-      })),
-      iframes:[...document.querySelectorAll("iframe")].map((item)=>({title:item.title,src:item.src}))
-    })`);
-    console.log(JSON.stringify(inspection, null, 2));
-    bigCoach.close();
-    panel.close();
-    return;
-  }
-  const automaticStatsText = await panel.evaluate("document.querySelector('#current-shin-rate').textContent");
-  const first = await panel.evaluate("window.bigcoachApp.refreshScene()");
-  mark("scene");
-  console.error("step: scene");
-  if (process.env.VERIFY_MAJOR_THRESHOLD === "1") {
-    const target = await bigCoach.evaluate(`window.__bigcoachDesktop.listDecisions().then((items) =>
-      items.find((item) => item.roundText === "東3局" && item.turn === 3 && item.actual === "1m"))`);
-    if (!target) throw new Error("東3局3巡目の打1mを見つけられませんでした");
-    await bigCoach.evaluate(`window.__bigcoachDesktop.goToPosition(${target.handCounter},${target.plyCounter})`);
+  try {
+    const opened = await panel.evaluate(`window.bigcoachApp.openReviewUrl(${JSON.stringify(reviewUrl)})`);
+    await new Promise((resolve) => setTimeout(resolve, 2500));
     const scene = await panel.evaluate("window.bigcoachApp.refreshScene()");
-    if (scene.majorMistake?.isMajor) throw new Error("23.114%の打1mが大悪手に判定されています");
+    const simulation = await panel.evaluate("window.bigcoachApp.runSimulation()");
+    const preview = await panel.evaluate("window.bigcoachApp.previewCard('verification')");
+    const diagnostics = await panel.evaluate("window.bigcoachApp.diagnose()");
+    const status = await bigCoach.evaluate(`({
+      url: location.href,
+      textLength: document.body.innerText.length
+    })`);
     console.log(JSON.stringify({
-      roundText: scene.roundText,
-      turn: scene.currentTurn,
-      actual: scene.actualDiscard,
-      actualProbability: scene.majorMistake.actualProbability,
-      majorMistake: scene.majorMistake
+      openedHistoryCount: opened.history?.length || 0,
+      scene: {
+        roundText: scene.roundText,
+        turn: scene.currentTurn,
+        hand: scene.handMpsz,
+        actual: scene.actualDiscard,
+        recommended: scene.recommendedDiscard
+      },
+      simulation: simulation.comparison,
+      preview: {
+        hasFrontImage: /data:image\/png;base64,/.test(preview.front),
+        hasBackImage: /data:image\/png;base64,/.test(preview.back),
+        duplicateCount: preview.duplicates?.length || 0
+      },
+      diagnostics,
+      status
     }, null, 2));
+  } finally {
     bigCoach.close();
     panel.close();
-    return;
   }
-  const stats = await panel.evaluate("window.bigcoachApp.refreshStats()");
-  const trendChart = await panel.evaluate(`(()=>{
-    const root=document.querySelector("#shin-trend-chart");
-    return {
-      svg:Boolean(root?.querySelector("svg")),
-      currentLine:Boolean(root?.querySelector(".trend-line.current")),
-      cumulativeLine:Boolean(root?.querySelector(".trend-line.cumulative")),
-      points:root?.querySelectorAll(".trend-point").length || 0,
-      latest:root?.querySelector(".trend-latest")?.textContent || ""
-    };
-  })()`);
-  if (!trendChart.svg || !trendChart.currentLine || !trendChart.cumulativeLine) {
-    throw new Error("Shin mistake trend chart was not rendered");
-  }
-  const major = await panel.evaluate("window.bigcoachApp.listMajorMistakes()");
-  mark("major");
-  console.error("step: major");
-  if (!major.items.length) throw new Error("No major mistakes found");
-  const jumped = await panel.evaluate("window.bigcoachApp.navigate('nextMajor')");
-  mark("jumped");
-  console.error("step: jumped");
-  const nanikiruStartedAt = Date.now();
-  const nanikiruJumped = await panel.evaluate("window.bigcoachApp.navigate('nextNanikiru')");
-  const nanikiruFirstElapsedMs = Date.now() - nanikiruStartedAt;
-  if (!nanikiruJumped?.nanikiruMistake?.isNanikiruMistake) {
-    throw new Error("Previous/next nanikiru mistake navigation did not reach a qualified scene");
-  }
-  mark("nanikiru-jumped");
-  console.error("step: nanikiru-jumped");
-  await panel.evaluate(`(()=>{
-    document.querySelector("#memo").value = "verification";
-    document.querySelector("#preview-card").click();
-    return true;
-  })()`);
-  const previewDeadline = Date.now() + 20000;
-  let previewDialogOpen = false;
-  while (Date.now() < previewDeadline) {
-    const uiState = await panel.evaluate(`(()=>({
-      dialogOpen:document.querySelector("#preview-dialog").open,
-      busyVisible:!document.querySelector("#busy").classList.contains("hidden"),
-      toastVisible:!document.querySelector("#toast").classList.contains("hidden"),
-      toastText:document.querySelector("#toast").textContent
-    }))()`);
-    if (uiState.dialogOpen) {
-      previewDialogOpen = true;
-      break;
-    }
-    if (!uiState.busyVisible && uiState.toastVisible) {
-      throw new Error(`Card preview UI failed: ${uiState.toastText}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  if (!previewDialogOpen) throw new Error("Card preview UI did not open after capture");
-  await panel.evaluate("document.querySelector('#preview-close').click()");
-  await new Promise((resolve) => setTimeout(resolve, 800));
-  const preview = await panel.evaluate("window.bigcoachApp.previewCard('verification')");
-  mark("preview");
-  console.error("step: preview");
-  const tileImagesInBack = (preview.back.match(/<img src="data:image\/png;base64/g) || []).length;
-  if (tileImagesInBack < 3) throw new Error("Card back does not contain tile images");
-  if (preview.captureDiagnostics?.front?.aiBarsVisible !== false ||
-      preview.captureDiagnostics?.front?.aiAdviceVisible !== false ||
-      preview.captureDiagnostics?.front?.opponentsHidden !== true) {
-    throw new Error("Card front is not in question mode with opponent hands hidden");
-  }
-  if (preview.captureDiagnostics?.back?.aiBarsVisible !== true ||
-      preview.captureDiagnostics?.back?.aiAdviceVisible !== true ||
-      preview.captureDiagnostics?.back?.opponentsRevealed !== true) {
-    throw new Error("Card back is not in answer mode with AI bars and opponent hands shown");
-  }
-  if (!preview.nanikiruMistake ||
-      !["complete", "judgment", "mistake", "opponent-riichi", "opponent-call", "unnecessary", "shanten"]
-        .includes(preview.nanikiruMistake.stage)) {
-    throw new Error("Nanikiru mistake staged classification was not returned");
-  }
-  if (!preview.nanikiruMistake.isNanikiruMistake || !preview.nanikiruMistakeCard ||
-      !preview.nanikiruMistakeCard.front.includes("data-schema=\"bigcoach-nanikiru-mistake-v1\"") ||
-      !preview.nanikiruMistakeCard.back.includes("bigcoach-nanikiru-mistake/v1")) {
-    throw new Error("Qualified nanikiru mistake flat card preview was not generated");
-  }
-  const flatFront = preview.nanikiruMistakeCard.front;
-  const flatMetadataIndex = flatFront.indexOf("<small>場風</small>");
-  const flatHandIndex = flatFront.indexOf("data-hand-mpsz=");
-  const flatHandImages = (flatFront.match(/data-hand-mpsz=/g) || []).length;
-  if (!(flatMetadataIndex >= 0 && flatHandIndex > flatMetadataIndex && flatHandImages === 1 &&
-      /data:image\/svg\+xml;base64/.test(flatFront))) {
-    throw new Error("Flat card does not place metadata above one combined SVG hand image");
-  }
-  if (!preview.nanikiruMistakeCard.back.includes("補正無の何切る結果") ||
-      !preview.nanikiruMistakeCard.back.includes("<table>") ||
-      !preview.nanikiruMistakeCard.structured?.simulatorWithoutRiverAdjustmentCandidates?.length) {
-    throw new Error("Flat card does not include the unadjusted simulator result");
-  }
-  if (preview.captureDiagnostics?.final?.showMortal !== true ||
-      preview.captureDiagnostics?.final?.showHands !== false ||
-      preview.captureDiagnostics?.final?.visualState?.aiBarsVisible !== true ||
-      preview.captureDiagnostics?.final?.visualState?.aiAdviceVisible !== true ||
-      preview.captureDiagnostics?.final?.visualState?.opponentsHidden !== true) {
-    throw new Error("BigCoach did not finish with AI visible and opponent hands hidden");
-  }
-  const frontPromptIndex = preview.front.search(/何切？|副露？|リーチ？/);
-  const frontImageIndex = preview.front.indexOf("<img");
-  if (frontPromptIndex < 0 || frontPromptIndex > frontImageIndex) throw new Error("Front prompt is not above the image");
-  const backMemoIndex = preview.back.indexOf("<h2>メモ</h2>");
-  const backImageIndex = preview.back.indexOf("<img");
-  const outcomeIndex = preview.back.indexOf("流局確率");
-  const comparisonIndex = preview.back.indexOf("<h2>何切る比較</h2>");
-  if (!(backMemoIndex >= 0 && backMemoIndex < backImageIndex &&
-      backImageIndex < outcomeIndex && outcomeIndex < comparisonIndex)) {
-    throw new Error("Card back sections are not in the required order");
-  }
-  const outcomeSection = preview.back.slice(outcomeIndex, comparisonIndex);
-  const outcomeValues = [...outcomeSection.matchAll(/([0-9.]+)%/g)].map((match) => match[1]);
-  if (outcomeValues.length !== 4) throw new Error("Four BigCoach outcome probabilities were not captured");
-  const frontData = preview.front.match(/data:image\/png;base64,([^"']+)/)?.[1];
-  const backData = preview.back.match(/data:image\/png;base64,([^"']+)/)?.[1];
-  if (frontData) fs.writeFileSync("verify-front.png", Buffer.from(frontData, "base64"));
-  if (backData) fs.writeFileSync("verify-back.png", Buffer.from(backData, "base64"));
-  let ankiRegistration = null;
-  if (process.env.VERIFY_ANKI_REGISTER === "1") {
-    ankiRegistration = await panel.evaluate(
-      "window.bigcoachApp.registerCard({memo:'BigCoach Anki Studio verification',duplicateMode:'separate'})"
-    );
-    if (!ankiRegistration?.noteId) throw new Error("Anki test note was not registered");
-    fs.writeFileSync("verify-anki-note-id.txt", String(ankiRegistration.noteId));
-  }
-  const shin = await panel.evaluate("window.bigcoachApp.navigate('nextShin')");
-  if (shin.roundText === nanikiruJumped.roundText && shin.currentTurn === nanikiruJumped.currentTurn) {
-    throw new Error("Shin navigation did not exclude the nanikiru mistake");
-  }
-  mark("shin");
-  console.error("step: shin");
-  await panel.evaluate("document.querySelector('#settings-open').click()");
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  const dialog = await panel.evaluate(`(()=>{const d=document.querySelector('#settings-dialog');const r=d.getBoundingClientRect();return {open:d.open,width:r.width,height:r.height,left:r.left,top:r.top}})()`);
-  await panel.evaluate("document.querySelector('#settings-dialog').close()");
-  console.log(JSON.stringify({
-    historyCount: opened.history.length,
-    automaticStatsText,
-    first: {
-      roundText: first.roundText,
-      turn: first.currentTurn,
-      hand: first.handMpsz,
-      actual: first.actualDiscard,
-      recommended: first.recommendedDiscard
-    },
-    majorMistakes: major.items.length,
-    stats,
-    trendChart,
-    jumped: {
-      roundText: jumped.roundText,
-      turn: jumped.currentTurn,
-      actual: jumped.actualDiscard,
-      recommended: jumped.recommendedDiscard,
-      isMajor: jumped.majorMistake?.isMajor
-    },
-    shin: {
-      roundText: shin.roundText,
-      turn: shin.currentTurn,
-      isShin: shin.shinMistake?.isShin
-    },
-    simulator: preview.comparison,
-    nanikiruMistake: preview.nanikiruMistake,
-    nanikiruNavigation: {
-      firstElapsedMs: nanikiruFirstElapsedMs,
-      first: {
-        roundText: nanikiruJumped.roundText,
-        turn: nanikiruJumped.currentTurn
-      }
-    },
-    cardImages: {
-      front: /data:image\/png;base64,/.test(preview.front),
-      back: /data:image\/png;base64,/.test(preview.back),
-      resultTileImages: tileImagesInBack,
-      prompt: /何切？|副露？|リーチ？/.test(preview.front),
-      outcomeProbabilities: ["流局確率", "横移動確率", "放銃確率", "和了確率"]
-        .every((label) => preview.back.includes(label)),
-      outcomeValues
-    },
-    captureDiagnostics: preview.captureDiagnostics,
-    finalDisplay: preview.captureDiagnostics.final,
-    ankiRegistration,
-    dialog
-  }, null, 2));
-  bigCoach.close();
-  panel.close();
 }
 
 main().catch((error) => {

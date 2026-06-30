@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -39,106 +39,6 @@ test("Anki card section is directly below scene navigation", () => {
   assert.ok(reviewUrl > anki);
 });
 
-test("settings expose a separate deck for nanikiru mistakes", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "src", "renderer", "index.html"),
-    "utf8"
-  );
-  assert.match(source, /name="nanikiruMistakeDeckName"/);
-});
-
-test("navigation exposes previous and next nanikiru mistake buttons", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "src", "renderer", "index.html"),
-    "utf8"
-  );
-  assert.match(source, /data-nav="previousNanikiru"/);
-  assert.match(source, /data-nav="nextNanikiru"/);
-});
-
-test("UI exposes bulk nanikiru mistake registration", () => {
-  const html = fs.readFileSync(
-    path.join(__dirname, "..", "src", "renderer", "index.html"),
-    "utf8"
-  );
-  const preload = fs.readFileSync(
-    path.join(__dirname, "..", "src", "preload.js"),
-    "utf8"
-  );
-  assert.match(html, /id="bulk-register-nanikiru"/);
-  assert.match(preload, /bulkRegisterNanikiru/);
-});
-
-test("flat nanikiru card places metadata above one combined hand image", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "src", "main.js"),
-    "utf8"
-  );
-  const start = source.indexOf("function nanikiruMistakeCardHtml");
-  const end = source.indexOf("async function refreshStats", start);
-  const card = source.slice(start, end);
-  const metadata = card.indexOf("<div><small>場風");
-  const handImage = card.indexOf('<img src="${escapeHtml(handImage)}"');
-  assert.ok(metadata >= 0 && handImage > metadata);
-  assert.match(source, /function tileStripSvg\(codes\)/);
-  assert.match(card, /<img src="\$\{escapeHtml\(handImage\)\}"/);
-});
-
-test("flat nanikiru card includes the unadjusted simulator result table", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "src", "main.js"),
-    "utf8"
-  );
-  const start = source.indexOf("function nanikiruMistakeCardHtml");
-  const end = source.indexOf("async function refreshStats", start);
-  const card = source.slice(start, end);
-  assert.match(card, /補正無の何切る結果/);
-  assert.match(card, /simulation\.withoutWall/);
-  assert.match(card, /simulatorWithoutRiverAdjustmentCandidates/);
-});
-
-test("unadjusted result candidate and ukeire tile media are stored for Anki", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "src", "main.js"),
-    "utf8"
-  );
-  const start = source.indexOf("async function storeTileMediaForNanikiru");
-  const end = source.indexOf("async function registerNanikiruMistakeCard", start);
-  const media = source.slice(start, end);
-  assert.match(media, /simulation\?\.withoutWall\?\.candidates/);
-  assert.match(media, /candidate\.ukeire/);
-});
-
-test("shin and major navigation use the nanikiru exclusion path", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "src", "main.js"),
-    "utf8"
-  );
-  assert.match(source, /kind\.endsWith\("Shin"\) \|\| kind\.endsWith\("Major"\)/);
-  assert.match(source, /return navigateExcludingNanikiru\(kind, targets, current\)/);
-});
-
-test("nanikiru mistakes register exclusively to the dedicated deck", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "src", "main.js"),
-    "utf8"
-  );
-  const handlerStart = source.indexOf('ipcMain.handle("anki:register"');
-  const handlerEnd = source.indexOf('ipcMain.handle("app:open-logs"', handlerStart);
-  const handler = source.slice(handlerStart, handlerEnd);
-  const qualifiedBranch = handler.indexOf("if (classification.isNanikiruMistake)");
-  const dedicatedAdd = handler.indexOf("registerNanikiruMistakeCard(", qualifiedBranch);
-  const qualifiedReturn = handler.indexOf("return {", dedicatedAdd);
-  const normalImages = handler.indexOf("let frontName", qualifiedReturn);
-  const normalAdd = handler.indexOf("const normalRegistration = await anki.add", normalImages);
-
-  assert.ok(qualifiedBranch >= 0);
-  assert.ok(dedicatedAdd > qualifiedBranch);
-  assert.ok(qualifiedReturn > dedicatedAdd);
-  assert.ok(normalImages > qualifiedReturn);
-  assert.ok(normalAdd > normalImages, "normal deck registration must be outside the qualified branch");
-});
-
 test("Anki registration waits until BigCoach is visible again", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "renderer", "renderer.js"),
@@ -148,12 +48,12 @@ test("Anki registration waits until BigCoach is visible again", () => {
   const handlerEnd = source.indexOf('$("#open-logs").addEventListener', handlerStart);
   const handler = source.slice(handlerStart, handlerEnd);
 
-  assert.match(handler, /await closeDialog\(\$\("#preview-dialog"\)\)/);
+  assert.match(handler, /await closeDialog\(dialog\)/);
   assert.match(source, /async function closeDialog\(dialog\)[\s\S]*dialog\.close\(\)[\s\S]*await syncBigCoachVisibility\(\)/);
   assert.match(source, /const overlayOpen = \$\$\("dialog"\)\.some\(\(dialog\) => dialog\.open\)/);
 });
 
-test("card capture finishes with AI visible and opponent hands hidden", () => {
+test("card capture restores initial AI state and hides opponent hands", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "main.js"),
     "utf8"
@@ -162,13 +62,170 @@ test("card capture finishes with AI visible and opponent hands hidden", () => {
   const handlerEnd = source.indexOf("function cardVisualStateMatches", handlerStart);
   const handler = source.slice(handlerStart, handlerEnd);
   const inspectInitial = handler.indexOf("captureDisplayState()");
-  const renderFront = handler.indexOf('ensureCardCaptureVisualState("front")');
+  const renderFront = handler.indexOf("prepareCapture('front')");
+  const renderBack = handler.indexOf("prepareCapture('back')");
   const restoreOriginal = handler.indexOf("restoreCapture");
 
   assert.ok(inspectInitial >= 0);
   assert.ok(renderFront > inspectInitial, "the initial state must be inspected before front mode is rendered");
-  assert.ok(restoreOriginal > renderFront, "the saved original state must be restored after capture");
-  assert.match(handler, /const finalDisplayState = \{ showMortal: true, showHands: false \}/);
-  assert.match(handler, /restored\.visualState\.aiBarsVisible/);
+  assert.ok(renderBack > renderFront, "back capture must happen after front capture");
+  assert.ok(restoreOriginal > renderBack, "the saved original state must be restored after capture");
+  assert.match(handler, /showMortal: Boolean\(initialDisplayState\?\.showMortal \?\? true\)/);
+  assert.doesNotMatch(handler, /restored\.visualState\.aiBarsVisible/);
   assert.match(handler, /restored\.visualState\.opponentsHidden/);
+});
+
+test("front card visual state accepts hidden AI and hidden opponent hands", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const start = source.indexOf("function cardVisualStateMatches");
+  const end = source.indexOf("async function waitForStablePaint", start);
+  const helper = source.slice(start, end);
+
+  assert.ok(start >= 0);
+  assert.doesNotMatch(helper, /handDisplayChecked/);
+  assert.match(helper, /!state\.aiBarsVisible/);
+  assert.match(helper, /!state\.aiAdviceVisible/);
+  assert.match(helper, /noAnalysisDataVisible/);
+  assert.match(helper, /state\.opponentsHidden/);
+});
+
+test("modern card capture uses BigCoach display checkboxes", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "bigcoach-adapter.js"),
+    "utf8"
+  );
+  const renderStart = source.indexOf("async function renderCaptureMode");
+  const renderEnd = source.indexOf("function captureDisplayState", renderStart);
+  const render = source.slice(renderStart, renderEnd);
+  const prepareStart = source.indexOf("async function prepareCapture");
+  const prepareEnd = source.indexOf("async function restoreCapture", prepareStart);
+  const prepare = source.slice(prepareStart, prepareEnd);
+  const controlsStart = source.lastIndexOf("function modernControls");
+  const controlsEnd = source.indexOf("async function setModernCheckbox", controlsStart);
+  const controls = source.slice(controlsStart, controlsEnd);
+
+  assert.match(source, /function findModernCheckbox/);
+  assert.match(source, /function setModernDisplayState/);
+  assert.match(controls, /AI\(\?:表示\|Analysis\|解析\)\?/);
+  assert.match(controls, /手牌表示\|手牌\|Hands\?/);
+  assert.match(render, /setModernDisplayState/);
+  assert.match(prepare, /setModernDisplayState/);
+  assert.doesNotMatch(source, /closest\("div,li,section"\)/);
+  assert.doesNotMatch(prepare, /applyModernCaptureMode\(mode\)/);
+});
+
+test("modern opponent hand visibility follows the hand display checkbox", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "bigcoach-adapter.js"),
+    "utf8"
+  );
+  const start = source.indexOf("function modernCaptureVisualState");
+  const end = source.indexOf("function applyModernCaptureMode", start);
+  const helper = source.slice(start, end);
+
+  assert.match(helper, /const handChecked = controls\.hands \? Boolean\(controls\.hands\.checked\) : null/);
+  assert.match(helper, /opponentsRevealed: handChecked === null/);
+  assert.match(helper, /: handChecked/);
+  assert.match(helper, /opponentsHidden: handChecked === null/);
+  assert.match(helper, /: !handChecked/);
+});
+
+test("visual paint wait has a timeout fallback for throttled BigCoach frames", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "bigcoach-adapter.js"),
+    "utf8"
+  );
+  const start = source.indexOf("async function waitForVisualPaint");
+  const end = source.indexOf("async function renderCaptureMode", start);
+  const helper = source.slice(start, end);
+
+  assert.match(helper, /requestAnimationFrame\(finish\)/);
+  assert.match(helper, /setTimeout\(finish, 100\)/);
+  assert.match(helper, /return captureVisualState\(\)/);
+});
+
+test("review URL loading tolerates Electron navigation aborts", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const start = source.indexOf("async function loadBigCoachReviewUrl");
+  const end = source.indexOf("async function captureScene", start);
+  const helper = source.slice(start, end);
+
+  assert.match(helper, /ERR_ABORTED/);
+  assert.match(helper, /ERR_FAILED/);
+  assert.match(helper, /renderer waits for scene readiness/);
+  assert.match(helper, /replaceBigCoachView\(\)/);
+  assert.match(source, /await loadBigCoachReviewUrl\(url\)/);
+});
+
+test("card paint stability ignores non-capture diagnostic noise", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const signatureStart = source.indexOf("function cardVisualStateSignature");
+  const signatureEnd = source.indexOf("async function waitForStablePaint", signatureStart);
+  const signature = source.slice(signatureStart, signatureEnd);
+  const waitStart = source.indexOf("async function waitForStablePaint");
+  const waitEnd = source.indexOf("async function ensureCardCaptureVisualState", waitStart);
+  const wait = source.slice(waitStart, waitEnd);
+
+  assert.ok(signatureStart >= 0);
+  assert.match(signature, /aiBarsVisible/);
+  assert.match(signature, /aiAdviceVisible/);
+  assert.match(signature, /opponentsRevealed/);
+  assert.match(signature, /opponentsHidden/);
+  assert.match(wait, /cardVisualStateSignature\(first\) !== cardVisualStateSignature\(second\)/);
+  assert.doesNotMatch(wait, /JSON\.stringify\(first\) !== JSON\.stringify\(second\)/);
+});
+
+test("active Anki card HTML uses Japanese prompts and readable simulator table labels", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const cardStart = source.lastIndexOf("function cardHtml");
+  const cardEnd = source.indexOf("async function ankiDeckChoices", cardStart);
+  const card = source.slice(cardStart, cardEnd);
+  const promptStart = source.lastIndexOf("function judgmentPrompt", cardStart);
+  const promptEnd = source.indexOf("function cardHtml", promptStart);
+  const prompt = source.slice(promptStart, promptEnd);
+  const tableStart = source.lastIndexOf("function candidateTable", cardStart);
+  const tableEnd = source.indexOf("function judgmentPrompt", tableStart);
+  const table = source.slice(tableStart, tableEnd);
+
+  assert.match(card, /judgmentPrompt\(scene\)/);
+  assert.match(prompt, /何切？/);
+  assert.match(prompt, /副露？/);
+  assert.match(prompt, /リーチ？/);
+  assert.doesNotMatch(prompt, /Discard\?|Call\?|Riichi\?/);
+  assert.doesNotMatch(card, /outcomeProbabilitiesHtml/);
+  assert.match(table, /打牌/);
+  assert.match(table, /期待値/);
+  assert.match(table, /和了率/);
+  assert.match(table, /聴牌率/);
+  assert.match(table, /受入/);
+  assert.match(table, /×\$\{item\.count\}/);
+  assert.match(table, /\$\{candidate\.ukeireTotal\}枚/);
+});
+
+test("Anki preview dialog exposes deck selection from preview result", () => {
+  const html = fs.readFileSync(
+    path.join(__dirname, "..", "src", "renderer", "index.html"),
+    "utf8"
+  );
+  const renderer = fs.readFileSync(
+    path.join(__dirname, "..", "src", "renderer", "renderer.js"),
+    "utf8"
+  );
+
+  assert.match(html, /id="preview-deck"/);
+  assert.match(renderer, /function renderPreviewDecks/);
+  assert.match(renderer, /renderPreviewDecks\(preview\)/);
+  assert.match(renderer, /deckName: \$\("#preview-deck"\)\.value/);
 });

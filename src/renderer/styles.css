@@ -41,6 +41,7 @@ button.ghost { background: transparent; }
 button.small { padding: 5px 8px; font-size: 12px; }
 button.action { width: 100%; padding: 11px; }
 button.danger-action { width: 100%; margin-top: 9px; border-color: #8e4148; background: #402329; color: #ffc4c7; }
+.risk-reading-controls { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .header-actions { display: flex; gap: 6px; }
 .navigation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .url-row { display: grid; grid-template-columns: 1fr auto; gap: 7px; align-items: end; }
@@ -117,6 +118,36 @@ menu { padding: 0; display: flex; justify-content: flex-end; gap: 8px; }
 .card-preview table { color: #222; }
 .card-preview th, .card-preview td { border-color: #ddd; }
 .card-preview .tile-text { font-weight: bold; }
+.card-preview .risk-table-note { margin: 2px 0 8px; color: #555; font-size: 12px; }
+.card-preview .risk-question-summary { margin: 4px 0 8px; }
+.card-preview .risk-question-summary-title { font-size: 12px; font-weight: 800; color: #8d4b00; margin-bottom: 4px; }
+.card-preview .risk-question-strip { display: flex; flex-wrap: nowrap; gap: 3px; overflow-x: auto; }
+.card-preview .risk-question-card { display: inline-flex; align-items: center; justify-content: center; min-width: 38px; padding: 2px; border-radius: 4px; border: 1px solid #d9e1e8; }
+.card-preview .risk-question-card.band-5 { background: #e6f4ee; }
+.card-preview .risk-question-card.band-10 { background: #edf2d8; }
+.card-preview .risk-question-card.band-15 { background: #f8e9cb; }
+.card-preview .risk-question-card.band-20 { background: #f8dccd; }
+.card-preview .risk-question-card.band-20p { background: #f4d1d6; }
+.card-preview .risk-question-tile { display: flex; justify-content: center; }
+.card-preview .risk-suit-table { display: grid; gap: 4px; }
+.card-preview .risk-suit-row { display: block; }
+.card-preview .risk-suit-cells { display: flex; flex-wrap: nowrap; gap: 3px; overflow-x: auto; }
+.card-preview .risk-suit-cell { border: 1px solid #d9e1e8; border-radius: 4px; padding: 3px 2px 2px; text-align: center; line-height: 1.02; display: flex; flex-direction: column; justify-content: flex-start; flex: 0 0 48px; min-height: 70px; }
+.card-preview .risk-suit-cell.empty { opacity: .28; }
+.card-preview .risk-suit-cell.band-item-genbutsu { background: #eef3f5; }
+.card-preview .risk-suit-cell.band-5 { background: #e6f4ee; }
+.card-preview .risk-suit-cell.band-10 { background: #edf2d8; }
+.card-preview .risk-suit-cell.band-15 { background: #f8e9cb; }
+.card-preview .risk-suit-cell.band-20 { background: #f8dccd; }
+.card-preview .risk-suit-cell.band-20p { background: #f4d1d6; }
+.card-preview .risk-suit-cell.risk-question { outline: 2px solid #f0a233; outline-offset: -2px; box-shadow: 0 0 0 1px rgba(240,162,51,.15) inset; }
+.card-preview .risk-suit-tile { display: flex; justify-content: center; margin-bottom: 1px; }
+.card-preview .risk-suit-cell .tile-image, .card-preview .risk-question-card .tile-image { height: 30px; }
+.card-preview .risk-suit-cell .tile, .card-preview .risk-question-card .tile { min-width: 23px; height: 30px; font-size: 11px; }
+.card-preview .risk-suit-category { font-size: 8px; line-height: 1; font-weight: 800; margin-bottom: 1px; word-break: keep-all; }
+.card-preview .risk-suit-basis { font-size: 9px; line-height: 1; color: #445; margin-bottom: 1px; }
+.card-preview .risk-suit-actual { font-size: 9px; line-height: 1; font-weight: 800; color: #9a240c; margin-top: auto; }
+.card-preview .risk-heatmap-genbutsu { margin-top: 2px; font-size: 10px; font-weight: 800; color: #1f5e58; }
 .register-row { margin-top: 12px; justify-content: flex-end; }
 .register-row label { margin: 0; width: 250px; }
 .busy { position: fixed; inset: 0; background: #080b10b8; z-index: 100; display: flex; align-items: center; justify-content: center; gap: 12px; font-weight: bold; }

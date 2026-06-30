@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   const TILE_PATTERN = /\/Regular_shortnames\/([^/"']+)\.svg/i;
   const MODERN_TILE_PATTERN = /\/mahjongfiles\/([^/"']+)\.png/i;
   const HONORS = { E: "1z", S: "2z", W: "3z", N: "4z", P: "5z", F: "6z", C: "7z" };
@@ -32,7 +32,7 @@
     } else {
       const classicControl = [...document.querySelectorAll(
         "label,button,.el-radio-button,.el-radio-button__inner"
-      )].find((element) => /クラシック|Classic|经典|經典/.test(element.textContent || ""));
+      )].find((element) => /繧ｯ繝ｩ繧ｷ繝・け|Classic|扈丞・|邯灘・/.test(element.textContent || ""));
       classicControl?.click();
     }
 
@@ -42,7 +42,7 @@
       if (frame?.contentDocument?.defaultView?.MM?.GS) return frame;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    throw new Error("BigCoachのクラシック解析画面へ切り替えられませんでした");
+    throw new Error("BigCoach縺ｮ繧ｯ繝ｩ繧ｷ繝・け隗｣譫千判髱｢縺ｸ蛻・ｊ譖ｿ縺医ｉ繧後∪縺帙ｓ縺ｧ縺励◆");
   }
 
   function doc() {
@@ -138,10 +138,10 @@
 
   function parseRoundIndex(roundText) {
     const source = String(roundText || "").replace(/\s+/g, "");
-    const windMatch = source.match(/[東东南西北]/);
+    const windMatch = source.match(/[東南西北]/);
     const numberMatch = source.match(/[1-4一二三四]/);
     if (!windMatch || !numberMatch) return null;
-    const windBase = { 東: 0, 东: 0, 南: 4, 西: 8, 北: 12 }[windMatch[0]];
+    const windBase = { 東: 0, 南: 4, 西: 8, 北: 12 }[windMatch[0]];
     const number = { 一: 1, 二: 2, 三: 3, 四: 4 }[numberMatch[0]] || Number(numberMatch[0]);
     const honbaMatch = source.match(/-(\d+)$/) || source.match(/(\d+)本場/);
     return { kyoku: windBase + number - 1, honba: honbaMatch ? Number(honbaMatch[1]) : 0 };
@@ -203,11 +203,11 @@
 
   async function loadModernReviewData() {
     const taskId = reviewTaskId();
-    if (!taskId) throw new Error("BigCoachの解析タスクIDを取得できませんでした");
+    if (!taskId) throw new Error("BigCoach縺ｮ隗｣譫舌ち繧ｹ繧ｯID繧貞叙蠕励〒縺阪∪縺帙ｓ縺ｧ縺励◆");
     if (currentModernReviewData?.taskId === taskId) return currentModernReviewData;
     const result = await fetch(`/api/v2/tasks/${encodeURIComponent(taskId)}/result`, { credentials: "include" }).then((response) => response.json());
     if (!result?.success || !result?.data?.jsonUrl) {
-      throw new Error(result?.message || "BigCoachの解析データ情報を取得できませんでした");
+      throw new Error(result?.message || "BigCoach縺ｮ隗｣譫舌ョ繝ｼ繧ｿ諠・ｱ繧貞叙蠕励〒縺阪∪縺帙ｓ縺ｧ縺励◆");
     }
     const data = await fetch(result.data.jsonUrl, { credentials: "include" }).then((response) => response.json());
     currentModernReviewData = { taskId, meta: result.data, data };
@@ -273,7 +273,7 @@
     if (!mainColumn) return [];
     return [...mainColumn.querySelectorAll('div[class*="cand_"]')].filter((el) => el.querySelector('span[class*="candRank"]') && el.querySelector('span[class*="candLabel"]')).map((el) => {
       const label = String(el.querySelector('span[class*="candLabel"]')?.textContent || "").trim();
-      const action = /立直|リーチ|riichi|reach/i.test(label) ? "reach" : null;
+      const action = /遶狗峩|繝ｪ繝ｼ繝－riichi|reach/i.test(label) ? "reach" : null;
       return {
         tile: normalizeTile(el.querySelector('img[alt]')?.alt || "") || action,
         label,
@@ -339,7 +339,7 @@
       actualDiscard: actionLabel(entry.actual),
       recommendedDiscard: actionLabel(entry.expected),
       candidates: candidateRows(entry),
-      aiSummary: entry.is_equal ? "AI一致" : "AI不一致",
+      aiSummary: entry.is_equal ? "AI荳閾ｴ" : "AI荳堺ｸ閾ｴ",
       judgmentType: judgmentType(entry),
       handsBySeat: [
         [...(entry.state?.tehai || [])].map(normalizeTile).filter(Boolean),
@@ -411,7 +411,7 @@
     await ensureClassicFrame();
     const game = doc().defaultView?.MM?.GS;
     const data = game?.fullData;
-    if (!data || !game?.ge) throw new Error("BigCoachの解析データがまだ読み込まれていません");
+    if (!data || !game?.ge) throw new Error("BigCoach縺ｮ隗｣譫舌ョ繝ｼ繧ｿ縺後∪縺隱ｭ縺ｿ霎ｼ縺ｾ繧後※縺・∪縺帙ｓ");
     const entries = [];
     let mismatchOrdinal = 0;
     for (let kyokuIndex = 0; kyokuIndex < (data.review?.kyokus || []).length; kyokuIndex += 1) {
@@ -559,7 +559,7 @@
         actualDiscard: actionLabel(entry?.actual),
         recommendedDiscard: actionLabel(entry?.expected),
         candidates: candidateRows(entry),
-        aiSummary: entry?.is_equal ? "AI一致" : "AI不一致",
+        aiSummary: entry?.is_equal ? "AI荳閾ｴ" : "AI荳堺ｸ閾ｴ",
         judgmentType: judgmentType(entry),
         handsBySeat,
         shanten: entry?.shanten ?? null,
@@ -617,7 +617,7 @@
       actualDiscard: actionLabel(entry?.actual),
       recommendedDiscard: actionLabel(entry?.expected),
       candidates: candidateRows(entry),
-      aiSummary: entry?.is_equal ? "実打とAI推奨が一致" : "実打とAI推奨が不一致",
+      aiSummary: entry?.is_equal ? "螳滓遠縺ｨAI謗ｨ螂ｨ縺御ｸ閾ｴ" : "螳滓遠縺ｨAI謗ｨ螂ｨ縺御ｸ堺ｸ閾ｴ",
       judgmentType: judgmentType(entry),
       handsBySeat,
       shanten: entry?.shanten ?? null,
@@ -655,7 +655,7 @@
     const button = modernButtonByText(texts);
     if (!button) {
       const labels = (Array.isArray(texts) ? texts : [texts]).join(" / ");
-      return { ok: false, reason: `BigCoach新UIのボタン「${labels}」が見つかりません` };
+      return { ok: false, reason: `BigCoach譁ｰUI縺ｮ繝懊ち繝ｳ縲・{labels}縲阪′隕九▽縺九ｊ縺ｾ縺帙ｓ` };
     }
     const rect = button.getBoundingClientRect();
     const options = {
@@ -706,27 +706,25 @@
     closeOverlays();
     if (isModernReviewPage()) {
       const modernTexts = {
-        "#ply-dec2": "前へ",
-        "#ply-inc2": "次へ",
-        "#prev-mismatch": "前のミス",
-        "#next-mismatch": "次のミス",
+        "#ply-dec2": "蜑阪∈",
+        "#ply-inc2": "谺｡縺ｸ",
+        "#prev-mismatch": "蜑阪・繝溘せ",
+        "#next-mismatch": "谺｡縺ｮ繝溘せ",
         "#prev-shin": "前のシン悪手",
         "#next-shin": "次のシン悪手",
         "#prev-major": "前の大悪手",
         "#next-major": "次の大悪手",
-        "#prev-nanikiru": "前の何切る悪手",
-        "#next-nanikiru": "次の何切る悪手",
-        "#prev-turn": "前の手番",
-        "#next-turn": "次の手番",
-        "#prev-round": "前局",
-        "#next-round": "次局"
+        "#prev-turn": "蜑阪・謇狗分",
+        "#next-turn": "谺｡縺ｮ謇狗分",
+        "#prev-round": "蜑榊ｱ",
+        "#next-round": "谺｡螻"
       };
       const text = modernTexts[id];
-      if (!text) return { ok: false, reason: `BigCoach新UIでは未対応の操作です: ${id}` };
+      if (!text) return { ok: false, reason: `BigCoach譁ｰUI縺ｧ縺ｯ譛ｪ蟇ｾ蠢懊・謫堺ｽ懊〒縺・ ${id}` };
       return clickModernButton(text);
     }
     const control = doc().querySelector(id);
-    if (!control) return { ok: false, reason: `BigCoach操作ボタン ${id} が見つかりませんでした` };
+    if (!control) return { ok: false, reason: `BigCoach謫堺ｽ懊・繧ｿ繝ｳ ${id} 縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ縺ｧ縺励◆` };
     control.click();
     await new Promise((resolve) => setTimeout(resolve, 80));
     return { ok: true, text: String(control.textContent || "") };
@@ -746,7 +744,7 @@
           : true;
         if (!hasDirectionalMatch) {
           const fallback = kind === "nextLance" ? matches[0] : matches.at(-1);
-          if (!fallback) return { ok: false, reason: "Lance謔ｪ謇九↓隧ｲ蠖薙☆繧句ｱ髱｢縺後≠繧翫∪縺帙ｓ" };
+          if (!fallback) return { ok: false, reason: "Lance悪手に該当する局面がありません。" };
           return goToPosition(fallback.handCounter, fallback.plyCounter);
         }
         for (let attempt = 0; attempt < Math.max(200, entries.length * 2); attempt += 1) {
@@ -754,13 +752,13 @@
           if (!result.ok) return result;
           if (currentModernLanceMisfire()) return { ok: true };
         }
-        return { ok: false, reason: "Lance悪手に該当する局面へ移動できませんでした" };
+        return { ok: false, reason: "Lance謔ｪ謇九↓隧ｲ蠖薙☆繧句ｱ髱｢縺ｸ遘ｻ蜍輔〒縺阪∪縺帙ｓ縺ｧ縺励◆" };
       }
       if (kind === "previous" || kind === "next") {
         return clickModernButton(kind === "previous" ? "\u524d\u306e\u624b\u756a" : "\u6b21\u306e\u624b\u756a");
       }
       if (kind === "previousRound" || kind === "nextRound") {
-        return clickModernButton(kind === "previousRound" ? "前局" : "次局");
+        return clickModernButton(kind === "previousRound" ? "蜑榊ｱ" : "谺｡螻");
       }
       const predicates = {
         previousMistake: (item) => item.isBad,
@@ -771,15 +769,13 @@
           (Number(item.shanten) <= 1 || item.opponentRiichi),
         nextMajor: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad &&
           (Number(item.shanten) <= 1 || item.opponentRiichi),
-        previousNanikiru: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad,
-        nextNanikiru: (item) => Number.isFinite(Number(item.actualProbability)) && Number(item.actualProbability) <= 0.001 && item.isBad,
         previousLance: (item) => modernLanceMisfire(item),
         nextLance: (item) => modernLanceMisfire(item)
       };
       const predicate = predicates[kind];
-      if (!predicate) return { ok: false, reason: `未対応の遷移種別です: ${kind}` };
+      if (!predicate) return { ok: false, reason: `譛ｪ蟇ｾ蠢懊・驕ｷ遘ｻ遞ｮ蛻･縺ｧ縺・ ${kind}` };
       const matches = entries.filter(predicate).sort((left, right) => (left.kyokuIndex - right.kyokuIndex) || (left.entryIndex - right.entryIndex));
-      if (!matches.length) return { ok: false, reason: `${kind} に該当する局面がありません` };
+      if (!matches.length) return { ok: false, reason: `${kind} 縺ｫ隧ｲ蠖薙☆繧句ｱ髱｢縺後≠繧翫∪縺帙ｓ` };
       const direction = kind.startsWith("previous") ? -1 : 1;
       let target = current
         ? (direction > 0
@@ -802,7 +798,7 @@
       }
       const refreshed = modernCurrentEntry(entries);
       if (refreshed && modernPositionKey(refreshed) === targetKey) return { ok: true };
-      return { ok: false, reason: "BigCoach譁ｰUI繝溘せ遘ｻ蜍輔ｒ襍､縺上※繝・ゃ繝ｼ繧ｿ縺ｸ遘ｻ蜍輔〒縺阪∪縺帙ｓ縺ｧ縺励◆" };
+      return { ok: false, reason: "BigCoach新UIで指定局面へ遷移できませんでした。" };
     }
     const controls = { previousMistake: "#prev-mismatch", nextMistake: "#next-mismatch" };
     if (kind === "previous" || kind === "next") {
@@ -817,10 +813,10 @@
           after.kyokuIndex !== before.kyokuIndex ||
           after.entryIndex !== before.entryIndex)) return result;
       }
-      return { ok: false, reason: "次の解析対象局面を見つけられませんでした" };
+      return { ok: false, reason: "谺｡縺ｮ隗｣譫仙ｯｾ雎｡螻髱｢繧定ｦ九▽縺代ｉ繧後∪縺帙ｓ縺ｧ縺励◆" };
     }
     const selector = controls[kind];
-    if (!selector) return { ok: false, reason: `未対応の移動操作です: ${kind}` };
+    if (!selector) return { ok: false, reason: `譛ｪ蟇ｾ蠢懊・遘ｻ蜍墓桃菴懊〒縺・ ${kind}` };
     return clickControl(selector);
   }
 
@@ -835,7 +831,7 @@
     }
     await ensureClassicFrame();
     const game = doc().defaultView?.MM?.GS;
-    if (!game?.ge) throw new Error("BigCoachプレイヤーの局面データを取得できませんでした");
+    if (!game?.ge) throw new Error("BigCoach繝励Ξ繧､繝､繝ｼ縺ｮ螻髱｢繝・・繧ｿ繧貞叙蠕励〒縺阪∪縺帙ｓ縺ｧ縺励◆");
     const decisions = [];
     let mismatchOrdinal = 0;
     for (let handCounter = 0; handCounter < game.ge.length; handCounter += 1) {
@@ -885,7 +881,7 @@
       const target = entries.find((item) =>
         Number(item.handCounter) === Number(handCounter) &&
         Number(item.plyCounter) === Number(plyCounter));
-      if (!target) return { ok: false, reason: "指定された局面がBigCoach新UIの解析結果にありません" };
+      if (!target) return { ok: false, reason: "謖・ｮ壹＆繧後◆螻髱｢縺沓igCoach譁ｰUI縺ｮ隗｣譫千ｵ先棡縺ｫ縺ゅｊ縺ｾ縺帙ｓ" };
       const current = modernCurrentEntry(entries);
       if (current &&
           Number(current.handCounter) === Number(target.handCounter) &&
@@ -894,7 +890,7 @@
       }
       const currentIndex = current ? entries.findIndex((item) => modernDecisionKey(item) === modernDecisionKey(current)) : -1;
       const targetIndex = entries.findIndex((item) => modernDecisionKey(item) === modernDecisionKey(target));
-      if (targetIndex < 0) return { ok: false, reason: "遷移先の局面を特定できませんでした" };
+      if (targetIndex < 0) return { ok: false, reason: "驕ｷ遘ｻ蜈医・螻髱｢繧堤音螳壹〒縺阪∪縺帙ｓ縺ｧ縺励◆" };
       const stepLabel = currentIndex >= 0 && targetIndex < currentIndex ? "\u524d\u306e\u624b\u756a" : "\u6b21\u306e\u624b\u756a";
       const stepCount = Math.max(1, Math.abs(targetIndex - Math.max(0, currentIndex)) + 2);
       for (let attempt = 0; attempt < stepCount; attempt += 1) {
@@ -907,7 +903,7 @@
           return { ok: true };
         }
       }
-      return { ok: false, reason: "BigCoach新UI上で目的の局面へ移動できませんでした" };
+      return { ok: false, reason: "BigCoach譁ｰUI荳翫〒逶ｮ逧・・螻髱｢縺ｸ遘ｻ蜍輔〒縺阪∪縺帙ｓ縺ｧ縺励◆" };
     }
     await ensureClassicFrame();
     const page = doc();
@@ -915,15 +911,15 @@
     const hand = Number(handCounter);
     const ply = Number(plyCounter);
     if (!game?.ge?.[hand]?.[ply]) {
-      return { ok: false, reason: "指定された局面がBigCoachの解析結果にありません" };
+      return { ok: false, reason: "謖・ｮ壹＆繧後◆螻髱｢縺沓igCoach縺ｮ隗｣譫千ｵ先棡縺ｫ縺ゅｊ縺ｾ縺帙ｓ" };
     }
     game.hand_counter = hand;
     game.ply_counter = ply;
 
-    // BigCoach自身の表示更新処理を「手牌表示の往復」で呼び出す。
-    // iframeを再読込しないため、局面移動ごとの解析JSON再取得は発生しない。
+    // BigCoach閾ｪ霄ｫ縺ｮ陦ｨ遉ｺ譖ｴ譁ｰ蜃ｦ逅・ｒ縲梧焔迚瑚｡ｨ遉ｺ縺ｮ蠕蠕ｩ縲阪〒蜻ｼ縺ｳ蜃ｺ縺吶・
+    // iframe繧貞・隱ｭ霎ｼ縺励↑縺・◆繧√∝ｱ髱｢遘ｻ蜍輔＃縺ｨ縺ｮ隗｣譫辱SON蜀榊叙蠕励・逋ｺ逕溘＠縺ｪ縺・・
     const toggleHands = page.querySelector("#toggle-hands");
-    if (!toggleHands) return { ok: false, reason: "BigCoachの表示更新ボタンを取得できませんでした" };
+    if (!toggleHands) return { ok: false, reason: "BigCoach縺ｮ陦ｨ遉ｺ譖ｴ譁ｰ繝懊ち繝ｳ繧貞叙蠕励〒縺阪∪縺帙ｓ縺ｧ縺励◆" };
     toggleHands.click();
     await new Promise((resolve) => setTimeout(resolve, 30));
     toggleHands.click();
@@ -934,7 +930,7 @@
   async function goToMismatch(ordinal) {
     const mistakes = await listMistakes();
     const target = mistakes[Number(ordinal)];
-    if (!target) return { ok: false, reason: `ミス #${Number(ordinal) + 1} が見つかりませんでした` };
+    if (!target) return { ok: false, reason: `繝溘せ #${Number(ordinal) + 1} 縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ縺ｧ縺励◆` };
     return goToPosition(target.handCounter, target.plyCounter);
   }
 
@@ -947,13 +943,96 @@
     });
   }
 
+  function visibleElement(element) {
+    if (!element) return false;
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      Number(style.opacity || 1) > 0 && rect.width > 0 && rect.height > 0;
+  }
+
+  function elementText(element) {
+    return String(element?.innerText || element?.textContent || "").replace(/\s+/g, "");
+  }
+
+  function checkboxText(input) {
+    const id = input.getAttribute("id");
+    const labelledBy = input.getAttribute("aria-labelledby");
+    const label = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
+    const ariaLabel = input.getAttribute("aria-label") || "";
+    const labelledText = labelledBy
+      ? labelledBy.split(/\s+/).map((labelId) =>
+        elementText(document.getElementById(labelId))).join("")
+      : "";
+    const parentText = elementText(input.closest("label") || input.parentElement);
+    const siblingText = `${elementText(input.previousElementSibling)}${elementText(input.nextElementSibling)}`;
+    return `${ariaLabel}${elementText(label)}${labelledText}${parentText}${siblingText}`;
+  }
+
+  function findModernCheckbox(pattern) {
+    const checkboxes = [...document.querySelectorAll('input[type="checkbox"]')];
+    return checkboxes.find((input) => pattern.test(checkboxText(input))) || null;
+  }
+
+  function modernControls() {
+    return {
+      ai: findModernCheckbox(/AI(?:表示|Analysis|解析)?/i),
+      hands: findModernCheckbox(/手牌表示|手牌|Hands?/i)
+    };
+  }
+
+  async function setModernCheckbox(input, checked) {
+    if (!input) return false;
+    if (Boolean(input.checked) === Boolean(checked)) return true;
+    input.click();
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitForVisualPaint(2);
+    return Boolean(input.checked) === Boolean(checked);
+  }
+
+  async function setModernDisplayState(expected) {
+    const controls = modernControls();
+    if (!controls.ai || !controls.hands) {
+      return {
+        ok: false,
+        reason: `modern display checkboxes not found. ai=${Boolean(controls.ai)} hands=${Boolean(controls.hands)}`
+      };
+    }
+    const aiOk = await setModernCheckbox(controls.ai, expected.showMortal);
+    const handsOk = await setModernCheckbox(controls.hands, expected.showHands);
+    await waitForVisualPaint(4);
+    if (expected.showMortal) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const state = captureVisualState();
+        if (state.aiAdviceVisible) break;
+        const button = [...document.querySelectorAll("button, [role='button']")]
+          .find((element) => visibleElement(element) && /AI\s*(Analysis|隗｣譫酢蛻・梵)?/i.test(elementText(element)));
+        if (button) button.click();
+        await waitForVisualPaint(4);
+        await new Promise((resolve) => window.setTimeout(resolve, 200));
+      }
+    }
+    return {
+      ok: aiOk && handsOk,
+      controls: {
+        aiChecked: Boolean(controls.ai.checked),
+        handsChecked: Boolean(controls.hands.checked)
+      },
+      visualState: captureVisualState()
+    };
+  }
+
   function modernCaptureVisualState() {
+    const controls = modernControls();
+    const aiChecked = controls.ai ? Boolean(controls.ai.checked) : null;
+    const handChecked = controls.hands ? Boolean(controls.hands.checked) : null;
     const candidateRows = [...document.querySelectorAll('div[class*="cand_"], div[class*="candCol"]')];
-    const aiAdviceVisible = candidateRows.some((element) => {
-      const style = getComputedStyle(element);
-      const rect = element.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-    });
+    const aiTableVisible = [...document.querySelectorAll("table, [role='table'], [class*='analysis'], [class*='eval'], [class*='result'], [class*='candidate']")]
+      .some((element) => visibleElement(element) && /(謫堺ｽ忿蜿ｯ閭ｽ蠖ｹ遞ｮ|騾ｲ蠑ｵ荳取隼濶ｯ|邨ｱ邇・謇鍋煙|Discard|Candidate|Mortal|Lance)/.test(elementText(element)));
+    const aiAdviceVisible = candidateRows.some(visibleElement) || aiTableVisible;
+    const noAnalysisDataVisible = [...document.querySelectorAll("body, main, div")]
+      .some((element) => visibleElement(element) && /蛻・梵繝・・繧ｿ縺ｪ縺慾No analysis data/i.test(elementText(element)));
     const opponentImages = visibleImages('div[class*="ohand"] img, div[class*="seatHand"] img');
     const backTiles = opponentImages.filter((image) => /\/(?:back|Blank)\.(?:svg|png)/i.test(image.currentSrc || image.src)).length;
     const faceTiles = opponentImages.filter((image) => tileFromImage(image)).length;
@@ -965,12 +1044,19 @@
       spoilerVisible: false,
       aiBarsVisible: aiAdviceVisible,
       aiAdviceVisible,
+      noAnalysisDataVisible,
       opponentHands: [],
       totalOpponentTiles: opponentImages.length,
       opponentFaceTiles: faceTiles,
       opponentBackTiles: backTiles,
-      opponentsRevealed: opponentImages.length > 0 && faceTiles > backTiles,
-      opponentsHidden: opponentImages.length === 0 || faceTiles === 0 || backTiles >= faceTiles
+      aiDisplayChecked: aiChecked,
+      handDisplayChecked: handChecked,
+      opponentsRevealed: handChecked === null
+        ? opponentImages.length > 0 && faceTiles > backTiles
+        : handChecked,
+      opponentsHidden: handChecked === null
+        ? opponentImages.length === 0 || faceTiles === 0 || backTiles >= faceTiles
+        : !handChecked
     };
   }
 
@@ -1007,7 +1093,7 @@
     const callBarRectCount = page.querySelectorAll(".killer-call-bars rect").length;
     const barRectCount = discardBarRectCount + callBarRectCount;
     const spoilerVisible = [...(discardSvg?.querySelectorAll("text") || [])]
-      .some((element) => /何切模式|何切モード|spoiler/i.test(element.textContent || ""));
+      .some((element) => /菴募・讓｡蠑楯菴募・繝｢繝ｼ繝榎spoiler/i.test(element.textContent || ""));
     const candidateTable = page.querySelector(".opt-info > table:first-of-type");
     const candidateDetailRows = Math.max(0, (candidateTable?.querySelectorAll("tr").length || 0) - 1);
     const opponentHands = [1, 2, 3].map((seat) => {
@@ -1053,7 +1139,8 @@
   function visualStateMatches(mode, state) {
     return mode === "front"
       ? !state.aiBarsVisible && !state.aiAdviceVisible && state.opponentsHidden
-      : state.aiBarsVisible && state.aiAdviceVisible && state.opponentsRevealed;
+      : ((state.aiBarsVisible && state.aiAdviceVisible) ||
+          (state.aiDisplayChecked && state.noAnalysisDataVisible)) && state.opponentsRevealed;
   }
 
   function displayStateMatches(expected, state) {
@@ -1069,21 +1156,33 @@
   async function waitForVisualPaint(frameCount = 4) {
     const view = doc().defaultView;
     for (let index = 0; index < frameCount; index += 1) {
-      await new Promise((resolve) => view.requestAnimationFrame(() => resolve()));
+      await new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          resolve();
+        };
+        view.requestAnimationFrame(finish);
+        view.setTimeout(finish, 100);
+      });
     }
     await new Promise((resolve) => view.setTimeout(resolve, 150));
     return captureVisualState();
   }
 
-  function renderCaptureMode(mode) {
+  async function renderCaptureMode(mode) {
     if (isModernReviewPage()) {
-      applyModernCaptureMode(mode);
-      return { ok: true };
+      const result = await setModernDisplayState({
+        showMortal: mode === "back",
+        showHands: mode === "back"
+      });
+      return result.ok ? { ok: true, ...result } : result;
     }
     const page = doc();
     const game = page.defaultView?.MM?.GS;
     if (!game?.ui) {
-      return { ok: false, reason: "BigCoachの描画機能を取得できませんでした" };
+      return { ok: false, reason: "BigCoach縺ｮ謠冗判讖溯・繧貞叙蠕励〒縺阪∪縺帙ｓ縺ｧ縺励◆" };
     }
     page.defaultView.setTimeout(() => {
       game.showMortal = mode === "back";
@@ -1102,15 +1201,17 @@
 
   function captureDisplayState() {
     if (isModernReviewPage()) {
+      const controls = modernControls();
+      const visualState = captureVisualState();
       return {
-        showMortal: modernCaptureMode !== "front",
-        showHands: modernCaptureMode === "back",
-        visualState: captureVisualState()
+        showMortal: controls.ai ? Boolean(controls.ai.checked) : visualState.aiAdviceVisible,
+        showHands: controls.hands ? Boolean(controls.hands.checked) : visualState.opponentsRevealed,
+        visualState
       };
     }
     const page = doc();
     const game = page.defaultView?.MM?.GS;
-    if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
+    if (!game) throw new Error("BigCoach縺ｮ陦ｨ遉ｺ迥ｶ諷九ｒ蜿門ｾ励〒縺阪∪縺帙ｓ縺ｧ縺励◆");
     return {
       showMortal: Boolean(game.showMortal),
       showHands: Boolean(game.showHands),
@@ -1132,18 +1233,29 @@
   async function prepareCapture(mode) {
     closeOverlays();
     if (isModernReviewPage()) {
-      applyModernCaptureMode(mode);
-      await waitForVisualPaint(4);
+      const expected = { showMortal: mode === "back", showHands: mode === "back" };
+      const display = await setModernDisplayState(expected);
+      if (!display.ok) throw new Error(display.reason || `Could not switch BigCoach modern display for ${mode}.`);
+      const verifiedState = captureVisualState();
+      if (!visualStateMatches(mode, verifiedState)) {
+        throw new Error(
+          `${mode} modern display is not ready. ` +
+          `AI bars=${verifiedState.aiBarsVisible ? "visible" : "hidden"}, ` +
+          `AI table=${verifiedState.aiAdviceVisible ? "visible" : "hidden"}, ` +
+          `opponents=${verifiedState.opponentsRevealed ? "face up" : verifiedState.opponentsHidden ? "face down" : "unknown"}, ` +
+          `aiChecked=${verifiedState.aiDisplayChecked}, handsChecked=${verifiedState.handDisplayChecked}`
+        );
+      }
       const boardRect = document.querySelector('[class*="board"], [class*="table"], main')?.getBoundingClientRect();
       return {
         hiddenOuterCount: 0,
         relativeToFrame: false,
         displayState: {
-          showMortal: mode === "back",
-          showHands: mode === "back",
+          showMortal: expected.showMortal,
+          showHands: expected.showHands,
           hasAiAnalysis: /AI|Analysis|Lance|MoE/i.test(String(document.body?.innerText || "")),
           hasNanikiruNotice: mode === "front",
-          ...captureVisualState()
+          ...verifiedState
         },
         outcomes: mode === "back" ? {
           draw: modernProbability("流局確率"),
@@ -1169,7 +1281,7 @@
     }
     const page = doc();
     const game = page.defaultView?.MM?.GS;
-    if (!game) throw new Error("BigCoachの表示状態を取得できませんでした");
+    if (!game) throw new Error("BigCoach縺ｮ陦ｨ遉ｺ迥ｶ諷九ｒ蜿門ｾ励〒縺阪∪縺帙ｓ縺ｧ縺励◆");
     const verifiedState = await ensureCaptureVisualState(mode);
     const frame = analysisFrame();
     const frameRect = frame?.getBoundingClientRect() || { x: 0, y: 0 };
@@ -1206,18 +1318,18 @@
 
   async function restoreCapture(previous) {
     if (isModernReviewPage()) {
-      if (previous?.showMortal && !previous?.showHands) {
-        applyModernCaptureMode("normal");
-      } else {
-        modernCaptureStyle?.remove();
-        modernCaptureStyle = null;
-        modernCaptureMode = null;
-      }
-      await waitForVisualPaint(4);
+      modernCaptureStyle?.remove();
+      modernCaptureStyle = null;
+      modernCaptureMode = null;
+      await setModernDisplayState({
+        showMortal: Boolean(previous?.showMortal),
+        showHands: Boolean(previous?.showHands)
+      });
+      const visualState = captureVisualState();
       return {
         showMortal: Boolean(previous?.showMortal),
         showHands: Boolean(previous?.showHands),
-        visualState: captureVisualState()
+        visualState
       };
     }
     const page = doc();
