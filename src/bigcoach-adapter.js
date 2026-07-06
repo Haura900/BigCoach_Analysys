@@ -976,18 +976,31 @@
 
   function modernControls() {
     return {
-      ai: findModernCheckbox(/AI(?:表示|Analysis|解析)?/i),
-      hands: findModernCheckbox(/手牌表示|手牌|Hands?/i)
+      ai: findModernCheckbox(/AI(?:表示|Analysis|解析)?|显示AI|顯示AI/i),
+      hands: findModernCheckbox(/手牌表示|手牌|Hands?|显示手牌|顯示手牌/i)
     };
   }
 
-  async function setModernCheckbox(input, checked) {
+  function dispatchModernShortcut(key) {
+    const eventInit = {
+      key,
+      code: `Key${key.toUpperCase()}`,
+      bubbles: true,
+      cancelable: true
+    };
+    for (const target of [window, document, document.body].filter(Boolean)) {
+      target.dispatchEvent(new KeyboardEvent("keydown", eventInit));
+      target.dispatchEvent(new KeyboardEvent("keyup", eventInit));
+    }
+  }
+
+  async function setModernShortcutState(input, checked, key) {
     if (!input) return false;
-    if (Boolean(input.checked) === Boolean(checked)) return true;
-    input.click();
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitForVisualPaint(2);
+    if (Boolean(input.checked) !== Boolean(checked)) {
+      dispatchModernShortcut(key);
+      await waitForVisualPaint(2);
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
     return Boolean(input.checked) === Boolean(checked);
   }
 
@@ -999,9 +1012,10 @@
         reason: `modern display checkboxes not found. ai=${Boolean(controls.ai)} hands=${Boolean(controls.hands)}`
       };
     }
-    const aiOk = await setModernCheckbox(controls.ai, expected.showMortal);
-    const handsOk = await setModernCheckbox(controls.hands, expected.showHands);
-    await waitForVisualPaint(4);
+    const aiOk = await setModernShortcutState(controls.ai, expected.showMortal, "m");
+    const handsOk = await setModernShortcutState(controls.hands, expected.showHands, "h");
+    await waitForModernDisplayState(expected, 1000);
+    await waitForVisualPaint(1);
     if (expected.showMortal) {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const state = captureVisualState();
@@ -1028,11 +1042,16 @@
     const aiChecked = controls.ai ? Boolean(controls.ai.checked) : null;
     const handChecked = controls.hands ? Boolean(controls.hands.checked) : null;
     const candidateRows = [...document.querySelectorAll('div[class*="cand_"], div[class*="candCol"]')];
-    const aiTableVisible = [...document.querySelectorAll("table, [role='table'], [class*='analysis'], [class*='eval'], [class*='result'], [class*='candidate']")]
-      .some((element) => visibleElement(element) && /(謫堺ｽ忿蜿ｯ閭ｽ蠖ｹ遞ｮ|騾ｲ蠑ｵ荳取隼濶ｯ|邨ｱ邇・謇鍋煙|Discard|Candidate|Mortal|Lance)/.test(elementText(element)));
-    const aiAdviceVisible = candidateRows.some(visibleElement) || aiTableVisible;
     const noAnalysisDataVisible = [...document.querySelectorAll("body, main, div")]
-      .some((element) => visibleElement(element) && /蛻・梵繝・・繧ｿ縺ｪ縺慾No analysis data/i.test(elementText(element)));
+      .some((element) => visibleElement(element) && /分析データなし|暂无分析数据|暫無分析數據|No analysis data/i.test(elementText(element)));
+    const aiTableVisible = [...document.querySelectorAll("table, [role='table'], [class*='candidate'], [class*='cand'], [class*='eval']")]
+      .some((element) => {
+        if (!visibleElement(element)) return false;
+        const text = elementText(element);
+        if (/暂无分析数据|暫無分析數據|No analysis data|分析データなし/i.test(text)) return false;
+        return /(打牌|期待値|和了率|聴牌率|受入|操作\s*P|可能役種|Discard|Candidate)/i.test(text);
+      });
+    const aiAdviceVisible = candidateRows.some(visibleElement) || aiTableVisible;
     const opponentImages = visibleImages('div[class*="ohand"] img, div[class*="seatHand"] img');
     const backTiles = opponentImages.filter((image) => /\/(?:back|Blank)\.(?:svg|png)/i.test(image.currentSrc || image.src)).length;
     const faceTiles = opponentImages.filter((image) => tileFromImage(image)).length;
@@ -1151,6 +1170,17 @@
       ? state.opponentsRevealed
       : state.opponentsHidden;
     return mortalMatches && handsMatch;
+  }
+
+  async function waitForModernDisplayState(expected, timeoutMs = 1000) {
+    const deadline = Date.now() + timeoutMs;
+    let state = captureVisualState();
+    while (!displayStateMatches(expected, state) && Date.now() < deadline) {
+      await waitForVisualPaint(1);
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      state = captureVisualState();
+    }
+    return state;
   }
 
   async function waitForVisualPaint(frameCount = 4) {

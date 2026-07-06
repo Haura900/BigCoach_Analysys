@@ -33,7 +33,8 @@ async function main() {
   const port = Number(process.argv[2] || 9223);
   const mode = process.argv[3] || "get";
   const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-  const target = targets.find((item) => item.url.startsWith("https://review.bigcoach.work"));
+  const target = targets.find((item) =>
+    item.url.startsWith("https://gokujan.com") || item.url.startsWith("https://review.bigcoach.work"));
   if (!target) throw new Error("BigCoach target not found");
   const client = await connect(target.webSocketDebuggerUrl);
   await client.send("Network.enable");
@@ -41,7 +42,7 @@ async function main() {
     const result = await client.send("Network.setCookie", {
       name: "bigcoach_studio_session_test",
       value: "restored-after-restart",
-      url: "https://api.bigcoach.work/",
+      url: "https://gokujan.com/",
       secure: true,
       httpOnly: true,
       sameSite: "None"

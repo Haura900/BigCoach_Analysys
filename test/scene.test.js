@@ -21,7 +21,7 @@ const raw = {
 };
 
 test("局面を正規化して安定IDを作る", () => {
-  const scene = validateScene(normalizeScene(raw, "https://review.bigcoach.work/?lang=ja"));
+  const scene = validateScene(normalizeScene(raw, "https://gokujan.com/review/test"));
   assert.equal(scene.handMpsz, "123m456p789s11223z");
   assert.equal(scene.currentTurn, 3);
   assert.equal(scene.missing.length, 0);

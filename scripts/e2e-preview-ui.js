@@ -1,10 +1,12 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 
-const REVIEW_URL = process.argv[2] || "https://review.bigcoach.work/review/4135cf4e5282f0a9";
+const REVIEW_URL = process.argv[2] || "https://gokujan.com/review/49cd51c090524b84";
 const DEBUG_PORT = Number(process.env.BIGCOACH_E2E_PORT || 9339);
 const ROOT = path.resolve(__dirname, "..");
 const USE_STARTUP_URL = process.env.BIGCOACH_E2E_STARTUP_URL !== "0";
@@ -33,14 +35,24 @@ function getJson(url) {
 async function waitForTargets() {
   const deadline = Date.now() + 30000;
   let lastError;
+  let lastTargets = [];
   while (Date.now() < deadline) {
     try {
       const targets = await getJson(`http://127.0.0.1:${DEBUG_PORT}/json/list`);
-      if (Array.isArray(targets) && targets.length) return targets;
+      if (Array.isArray(targets)) {
+        lastTargets = targets;
+        if (targets.some((item) =>
+          item.type === "page" && /renderer\/index\.html|BigCoach Anki Studio/.test(`${item.url} ${item.title}`))) {
+          return targets;
+        }
+      }
     } catch (error) {
       lastError = error;
     }
     await sleep(250);
+  }
+  if (lastTargets.length) {
+    throw new Error(`app target was not exposed: ${lastTargets.map((item) => `${item.type}:${item.title}:${item.url}`).join(" | ")}`);
   }
   throw lastError || new Error("remote debugging targets were not exposed");
 }
@@ -128,19 +140,23 @@ async function clickHandler(cdp, selector) {
   await cdp.eval(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!element) throw new Error("click target not found");
-    element.click();
-  })()`);
+    setTimeout(() => element.click(), 0);
+    return true;
+  })()`, false);
 }
 
 async function setInput(cdp, selector, value) {
   await cdp.eval(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!element) throw new Error("input not found");
-    element.focus();
-    element.value = ${JSON.stringify(value)};
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-  })()`);
+    setTimeout(() => {
+      element.focus();
+      element.value = ${JSON.stringify(value)};
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }, 0);
+    return true;
+  })()`, false);
 }
 
 async function waitFor(cdp, label, predicateSource, timeoutMs) {
@@ -158,7 +174,7 @@ async function waitFor(cdp, label, predicateSource, timeoutMs) {
 async function dumpBigCoachDiagnostics() {
   const targets = await getJson(`http://127.0.0.1:${DEBUG_PORT}/json/list`);
   const target = targets.find((item) =>
-    item.type === "page" && item.url.startsWith("https://review.bigcoach.work/review/"));
+    item.type === "page" && /^https:\/\/(?:gokujan\.com|review\.bigcoach\.work)\/review\//.test(item.url));
   if (!target) return;
   const page = new Cdp(target.webSocketDebuggerUrl);
   try {
@@ -196,14 +212,19 @@ async function dumpBigCoachDiagnostics() {
 
 async function main() {
   const electron = path.join(ROOT, "node_modules", "electron", "dist", "electron.exe");
-  const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" };
+  const e2eUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bigcoach-e2e-"));
+  const env = {
+    ...process.env,
+    ELECTRON_ENABLE_LOGGING: "1",
+    BIGCOACH_E2E_USER_DATA_DIR: e2eUserDataDir
+  };
   if (USE_STARTUP_URL) env.BIGCOACH_E2E_REVIEW_URL = REVIEW_URL;
   delete env.ELECTRON_RUN_AS_NODE;
   const child = spawn(electron, [".", `--remote-debugging-port=${DEBUG_PORT}`], {
     cwd: ROOT,
     stdio: ["ignore", "pipe", "pipe"],
     env,
-    windowsHide: true
+    windowsHide: false
   });
   let stderr = "";
   child.stdout.on("data", () => {});
@@ -232,8 +253,10 @@ async function main() {
     if (!USE_STARTUP_URL) {
       console.error("opening review URL from UI");
       await setInput(cdp, "#review-url", REVIEW_URL);
-      await click(cdp, "#open-review-url");
+      await clickHandler(cdp, "#open-review-url");
       await sleep(500);
+      const firstOpenBusy = await cdp.eval(`!document.querySelector("#busy")?.classList.contains("hidden")`);
+      if (!firstOpenBusy) await clickHandler(cdp, "#open-review-url");
       const openStarted = await cdp.eval(`(() => {
         const busy = !document.querySelector("#busy")?.classList.contains("hidden");
         const title = document.querySelector("#scene-title")?.textContent || "";
@@ -244,7 +267,7 @@ async function main() {
       }
     } else {
       console.error("refreshing startup review URL from UI");
-      await click(cdp, "#refresh-scene");
+      await clickHandler(cdp, "#refresh-scene");
       await sleep(500);
       const refreshStarted = await cdp.eval(`(() => ({
         busy: !document.querySelector("#busy")?.classList.contains("hidden")
@@ -272,7 +295,7 @@ async function main() {
     }
 
     console.error("clicking preview card");
-    await click(cdp, "#preview-card");
+    await clickHandler(cdp, "#preview-card");
     await sleep(500);
     const previewStarted = await cdp.eval(`(() => ({
       busy: !document.querySelector("#busy")?.classList.contains("hidden"),
@@ -315,6 +338,26 @@ async function main() {
       backText: preview.backText.trim().slice(0, 240),
       deckCount: preview.deckCount
     }, null, 2));
+
+    if (process.env.VERIFY_ANKI_REGISTER === "1") {
+      console.error("clicking register card");
+      await clickHandler(cdp, "#register-card");
+      const registered = await waitFor(cdp, "registered", `() => {
+        const dialog = document.querySelector("#preview-dialog");
+        const toast = document.querySelector("#toast");
+        const busy = !document.querySelector("#busy")?.classList.contains("hidden");
+        const toastText = toast?.textContent || "";
+        const error = toast && !toast.classList.contains("hidden") && toast.classList.contains("error")
+          ? toastText
+          : "";
+        if (error) return { ok: false, error };
+        return {
+          ok: !busy && !dialog?.open && /Ankiカードを登録しました|既存カードを更新しました|重複カード/.test(toastText),
+          toastText
+        };
+      }`, 120000);
+      console.log(JSON.stringify({ registered: true, toastText: registered.toastText }, null, 2));
+    }
   } finally {
     try {
       const targets = await getJson(`http://127.0.0.1:${DEBUG_PORT}/json/list`);

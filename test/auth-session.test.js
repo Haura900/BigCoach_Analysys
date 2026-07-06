@@ -13,6 +13,8 @@ test("BigCoachのAPI・画面Cookieだけを保存対象にする", () => {
   assert.equal(isBigCoachCookie({ domain: "api.bigcoach.work" }), true);
   assert.equal(isBigCoachCookie({ domain: ".bigcoach.work" }), true);
   assert.equal(isBigCoachCookie({ domain: "review.bigcoach.work" }), true);
+  assert.equal(isBigCoachCookie({ domain: "gokujan.com" }), true);
+  assert.equal(isBigCoachCookie({ domain: ".gokujan.com" }), true);
   assert.equal(isBigCoachCookie({ domain: "example.com" }), false);
 });
 

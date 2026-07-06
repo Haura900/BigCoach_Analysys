@@ -20,13 +20,18 @@ const {
   summarizeRecords,
   buildTrend
 } = require("./lib/stats");
+
+if (process.env.BIGCOACH_E2E_USER_DATA_DIR) {
+  app.setPath("userData", process.env.BIGCOACH_E2E_USER_DATA_DIR);
+}
+
 const DEFAULT_SETTINGS = {
   settingsVersion: 4,
   deckName: "BigCoach",
   riskReadingDeckName: "BigCoach::RiskReading",
   riskReadingNote: "相手の河から放銃危険度を読む。",
   riskReadingDeviationThreshold: 0.03,
-  modelName: "陜難ｽｺ隴幢ｽｬ",
+  modelName: "Basic",
   tags: ["BigCoach"],
   language: "ja",
   enableRedDora: true,
@@ -111,7 +116,7 @@ function saveSettings(next) {
 }
 
 function bigCoachUrl() {
-  return `https://review.bigcoach.work/?lang=${encodeURIComponent(settings.language || "ja")}`;
+  return "https://gokujan.com/";
 }
 
 function validateReviewUrl(value) {
@@ -119,9 +124,9 @@ function validateReviewUrl(value) {
   try { url = new URL(String(value || "").trim()); } catch {
     throw new Error("Invalid review URL.");
   }
-  if (url.protocol !== "https:" || url.hostname !== "review.bigcoach.work" ||
-      !url.pathname.startsWith("/review/")) {
-    throw new Error("Please enter a URL like https://review.bigcoach.work/review/...");
+  const allowedHost = url.hostname === "gokujan.com" || url.hostname === "review.bigcoach.work";
+  if (url.protocol !== "https:" || !allowedHost || !url.pathname.startsWith("/review/")) {
+    throw new Error("Please enter a URL like https://gokujan.com/review/...");
   }
   return url.href;
 }
@@ -144,7 +149,7 @@ function layoutViews() {
 
 function attachBigCoachViewEvents(view) {
   view.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("https://review.bigcoach.work")) {
+    if (url.startsWith("https://gokujan.com") || url.startsWith("https://review.bigcoach.work")) {
       view.webContents.loadURL(url);
       return { action: "deny" };
     }
@@ -168,11 +173,6 @@ function attachBigCoachViewEvents(view) {
     } catch (error) {
       log(error.stack || error);
       mainWindow.webContents.send("bigcoach:status", { ok: false, message: error.message });
-    }
-  });
-  view.webContents.on("did-frame-finish-load", (_event, isMainFrame) => {
-    if (!isMainFrame && view.webContents.getURL().includes("/review/")) {
-      scheduleAutomaticStatsRefresh();
     }
   });
   view.webContents.on("did-fail-load", (_event, code, description) => {
@@ -215,7 +215,7 @@ function findAnalysisFrame(frame = bigCoachView?.webContents.mainFrame) {
     const found = findAnalysisFrame(child);
     if (found) return found;
   }
-  if (/^https:\/\/review\.bigcoach\.work\/review\/[^/?#]+/.test(frame.url || "")) return frame;
+  if (/^https:\/\/(?:gokujan\.com|review\.bigcoach\.work)\/review\/[^/?#]+/.test(frame.url || "")) return frame;
   return null;
 }
 
@@ -260,7 +260,10 @@ async function loadBigCoachReviewUrl(url) {
   const contents = bigCoachView?.webContents;
   if (!contents) throw new Error("BigCoach display is not available.");
   try {
-    await contents.loadURL(url);
+    await Promise.race([
+      contents.loadURL(url),
+      new Promise((resolve) => setTimeout(resolve, 5000))
+    ]);
   } catch (error) {
     if (!["ERR_ABORTED", "ERR_FAILED"].includes(error?.code)) throw error;
     log(`loadURL reported ${error.code} for ${url}; continuing because renderer waits for scene readiness`);
@@ -367,7 +370,7 @@ async function navigate(kind) {
   } else if (kind.endsWith("Major")) {
     targets = listMajorMistakes(decisions, settings);
   } else {
-    throw new Error(`隴幢ｽｪ陝・ｽｾ陟｢諛翫・驕假ｽｻ陷榊｢捺｡・抄諛翫堤ｸｺ繝ｻ ${kind}`);
+    throw new Error(`未対応の遷移種別です: ${kind}`);
   }
   if (!targets.length) throw new Error("No target scenes found.");
   const currentPosition = {
@@ -386,7 +389,7 @@ async function loadMajorMistakes() {
   currentMajorMistakes = listMajorMistakes(decisions, settings);
   return {
     items: currentMajorMistakes,
-    definition: `1郢ｧ・ｷ郢晢ｽ｣郢晢ｽｳ郢昴・ﾎｦ闔会ｽ･闕ｳ荵昴・髢ｨ・ｴ霑壼ｾ後・闔蛾摩・ｮ・ｶ郢晢ｽｪ郢晢ｽｼ郢昶扱蜃ｾ邵ｺ・ｫ邵ｲ竏晢ｽｮ貊馴□邵ｺ・ｨAI隰暦ｽｨ陞ゑｽｨ邵ｺ讙守・邵ｺ・ｪ郢ｧ鄙ｫﾂ竏晢ｽｮ貊馴□隰暦ｽｨ陞ゑｽｨ陟趣ｽｦ邵ｺ繝ｻ{(Number(settings.shinMistakeThreshold) * 100).toFixed(1)}%闔会ｽ･闕ｳ荵昴・陞ｻﾂ鬮ｱ・｢`
+    definition: `1シャンテン以下、聴牌時、または他家リーチ時の悪手で、実打のAI推奨度が ${(Number(settings.shinMistakeThreshold) * 100).toFixed(1)}% 以下の局面`
   };
 }
 
@@ -681,12 +684,14 @@ function judgmentPrompt(scene) {
   return "何切？";
 }
 
-function cardHtml(scene, simulation, memo, images, mediaMode = "preview") {
+function cardHtml(scene, simulation, memo, images, mediaMode = "preview", options = {}) {
   const comparison = comparisonStatus(scene, simulation);
+  const frontNote = String(options.frontNote || "").trim();
   const front = `
     <div class="bigcoach-card">
       <div style="font-size:1px;color:#fff">BigCoach:${escapeHtml(scene.sceneId)}</div>
       <h2 style="text-align:center;font-size:28px">${judgmentPrompt(scene)}</h2>
+      ${frontNote ? `<div style="text-align:center;font-size:18px;font-weight:700;margin:-8px 0 10px">${escapeHtml(frontNote)}</div>` : ""}
       <img src="${escapeHtml(images.front)}" style="max-width:100%">
     </div>`;
   const back = `
@@ -696,12 +701,10 @@ function cardHtml(scene, simulation, memo, images, mediaMode = "preview") {
       <h2>何切る比較</h2>
       <p>実打: ${tileHtml(comparison.actual, mediaMode)} / BigCoach推奨: ${tileHtml(comparison.bigCoach, mediaMode)} / シミュレーター推奨: ${tileHtml(comparison.simulator, mediaMode)}</p>
       <p>BigCoachとシミュレーター: <strong>${comparison.bigCoachMatchesSimulator ? "一致" : "不一致"}</strong></p>
-      <p>シン悪手: ${scene.shinMistake.isShin ? "該当" : "非該当"} (${escapeHtml(scene.shinMistake.reason)})</p>
-      <p>大悪手: ${scene.majorMistake?.isMajor ? "該当" : "非該当"} (${escapeHtml(scene.majorMistake?.reason || "判定不可")})</p>
       ${candidateTable("何切る結果（見えている牌を残り枚数から除外）", simulation?.withWall, mediaMode)}
       ${candidateTable("何切る結果（補正なし）", simulation?.withoutWall, mediaMode)}
-      <hr><p><a href="${escapeHtml(scene.url)}">BigCoach隗｣譫千ｵ先棡</a></p>
-      <p>螻髱｢ID: ${escapeHtml(scene.sceneId)}</p>
+      <hr><p><a href="${escapeHtml(scene.url)}">BigCoach解析結果</a></p>
+      <p>局面ID: ${escapeHtml(scene.sceneId)}</p>
     </div>`;
   return { front, back, comparison };
 }
@@ -820,15 +823,15 @@ function riskCategoryForTile(tile, scene, opponent, genbutsu, counts) {
   if ([1, 2, 3, 7, 8, 9].includes(number)) {
     const target = number <= 3 ? number + 3 : number - 3;
     const suji = has(target);
-    if (number === 1 || number === 9) return suji ? "繧ｹ繧ｸ19" : "辟｡繧ｹ繧ｸ19";
-    return suji ? "繧ｹ繧ｸ2378" : "辟｡繧ｹ繧ｸ2378";
+    if (number === 1 || number === 9) return suji ? "スジ19" : "無スジ19";
+    return suji ? "スジ2378" : "無スジ2378";
   }
   if (number === 4 || number === 5 || number === 6) {
     const left = has(number - 3);
     const right = has(number + 3);
-    if (left && right) return "荳｡繧ｹ繧ｸ456";
-    if (left || right) return "迚・せ繧ｸ456";
-    return "辟｡繧ｹ繧ｸ456";
+    if (left && right) return "両スジ456";
+    if (left || right) return "片スジ456";
+    return "無スジ456";
   }
   return null;
 }
@@ -849,10 +852,10 @@ function buildRiskReadingProblem(scene, targetKey, threshold = 0.03) {
     return {
       tile,
       category,
-      expected: category === "迴ｾ迚ｩ" ? { min: 0, max: 0, label: "迴ｾ迚ｩ" } : expected,
+      expected: category === "現物" ? { min: 0, max: 0, label: "現物" } : expected,
       actual,
       deviation,
-      isQuestion: Boolean(expected && category !== "迴ｾ迚ｩ" && deviation >= Number(threshold || 0))
+      isQuestion: Boolean(expected && category !== "現物" && deviation >= Number(threshold || 0))
     };
   }).filter((item) => item.category && item.expected);
   return {
@@ -868,7 +871,7 @@ function riskProblemTableHtml(problem, mediaMode = "preview", showActual = false
   const questions = problem.questions || [];
   const questionSummary = questions.length ? `
     <div class="risk-question-summary">
-      <div class="risk-question-summary-title">蜃ｺ鬘・/div>
+      <div class="risk-question-summary-title">出題</div>
       <div class="risk-question-strip">
         ${questions.map((item) => `
           <div class="risk-question-card ${riskRowBand(item)}">
@@ -925,7 +928,7 @@ function riskHeatmapHtml(opponent, mediaMode = "preview") {
       "band-20": { background: "#b84d1d", color: "#fff4ea", label: "~20%" },
       "band-20p": { background: "#8e2430", color: "#fff2f4", label: "20%~" }
     }[band];
-    const badge = genbutsu.has(tile) ? `<div class="risk-heatmap-genbutsu">迴ｾ迚ｩ</div>` : "";
+    const badge = genbutsu.has(tile) ? `<div class="risk-heatmap-genbutsu">現物</div>` : "";
     return `<td style="text-align:center;background:${palette.background};color:${palette.color};border:1px solid #ddd;padding:5px">
       <div>${tileHtml(tile, mediaMode)}</div>
       <strong style="display:block;font-size:13px">${riskRatePercent(rate)}</strong>
@@ -966,25 +969,25 @@ function riskReadingCardHtml(scene, frontImage, targetKey, memo, mediaMode = "pr
     `${item.tile}（${item.category} / 表: ${item.expected.label}）`).join("、");
   const front = `
     <div class="bigcoach-risk-card" data-schema="bigcoach-risk-reading/v1" data-scene-id="${escapeHtml(scene.sceneId)}">
-      <h2 style="text-align:center">蜊ｱ髯ｺ蠎ｦ隱ｭ縺ｿ: ${escapeHtml(opponent.label)}</h2>
-      <p><strong>${escapeHtml(opponent.label)}縺ｸ縺ｮ謾ｾ驫・紫縺瑚｡ｨ縺ｮ蝓ｺ貅悶°繧牙､悶ｌ縺ｦ縺・ｋ迚後ｒ隱ｭ繧縲・/strong></p>
+      <h2 style="text-align:center">危険度読み: ${escapeHtml(opponent.label)}</h2>
+      <p><strong>${escapeHtml(opponent.label)}への放銃率が表の基準から外れている牌を読む。</strong></p>
       <img src="${escapeHtml(frontImage)}" style="max-width:100%">
-      <h2>陦ｨ縺九ｉ蜿ら・縺励◆蝓ｺ貅・/h2>
-      <div class="risk-table-note">陦ｨ縺ｮ蝓ｺ貅・ ~5%, ~10%, ~15%, ~20%, 20%~</div>
+      <h2>表から参照した基準</h2>
+      <div class="risk-table-note">表の基準: ~5%, ~10%, ~15%, ~20%, 20%~</div>
       ${riskProblemTableHtml(problem, mediaMode, false)}
     </div>`;
   const back = `
     <div class="bigcoach-risk-card" data-schema="bigcoach-risk-reading/v1" data-scene-id="${escapeHtml(scene.sceneId)}">
-      <h2>蜊ｱ髯ｺ蠎ｦ隱ｭ縺ｿ: ${escapeHtml(opponent.label)}</h2>
+      <h2>危険度読み: ${escapeHtml(opponent.label)}</h2>
       <div style="margin-bottom:10px">${escapeHtml(memo || "").replace(/\n/g, "<br>")}</div>
       <img src="${escapeHtml(frontImage)}" style="max-width:100%">
-      <h2>蝓ｺ貅冶｡ｨ縺ｨ螳滓ｸｬ謾ｾ驫・紫</h2>
-      <div class="risk-table-note">陦ｨ縺ｮ蝓ｺ貅・ ~5%, ~10%, ~15%, ~20%, 20%~</div>
+      <h2>基準表と実測放銃率</h2>
+      <div class="risk-table-note">表の基準: ~5%, ~10%, ~15%, ~20%, 20%~</div>
       ${riskProblemTableHtml(problem, mediaMode, true)}
-      <h2>逕溘・謾ｾ驫・些髯ｺ蠎ｦ繝偵・繝医・繝・・</h2>
+      <h2>生の放銃危険度ヒートマップ</h2>
       ${riskHeatmapHtml(opponent, mediaMode)}
-      <details><summary>蜉蟾･逕ｨJSON</summary><pre data-format="bigcoach-risk-reading/v1">${escapeHtml(JSON.stringify(structured))}</pre></details>
-      <p><a href="${escapeHtml(scene.url)}">BigCoach隗｣譫千ｵ先棡</a> ・・螻髱｢ID: ${escapeHtml(scene.sceneId)}</p>
+      <details><summary>加工用JSON</summary><pre data-format="bigcoach-risk-reading/v1">${escapeHtml(JSON.stringify(structured))}</pre></details>
+      <p><a href="${escapeHtml(scene.url)}">BigCoach解析結果</a> / 局面ID: ${escapeHtml(scene.sceneId)}</p>
     </div>`;
   return { front, back, structured, opponent };
 }
@@ -1123,7 +1126,10 @@ async function diagnose() {
   };
   try {
     const url = bigCoachView?.webContents.getURL() || "";
-    result.bigCoach = { ok: url.startsWith("https://review.bigcoach.work"), message: url || "未読込" };
+    result.bigCoach = {
+      ok: url.startsWith("https://gokujan.com") || url.startsWith("https://review.bigcoach.work"),
+      message: url || "未読込"
+    };
   } catch (error) { result.bigCoach.message = error.message; }
   try {
     const scene = await captureScene();
@@ -1144,8 +1150,8 @@ async function diagnose() {
     const info = await anki.diagnose(settings);
     result.anki = {
       ok: info.deckExists && info.modelExists,
-      message: !info.deckExists ? `繝・ャ繧ｭ縲・{settings.deckName}縲阪′縺ゅｊ縺ｾ縺帙ｓ` :
-        !info.modelExists ? `繝弱・繝医ち繧､繝励・{settings.modelName}縲阪′縺ゅｊ縺ｾ縺帙ｓ` : "AnkiConnect蛻ｩ逕ｨ蜿ｯ",
+      message: !info.deckExists ? `デッキ「${settings.deckName}」がありません` :
+        !info.modelExists ? `ノートタイプ「${settings.modelName}」がありません` : "AnkiConnect利用可",
       info
     };
   } catch (error) { result.anki.message = error.message; }
@@ -1194,7 +1200,9 @@ function registerIpc() {
   ipcMain.handle("stats:refresh", () => refreshStats());
   ipcMain.handle("anki:preview-risk-reading", (_event, payload) => previewRiskReadingCard(payload));
   ipcMain.handle("anki:register-risk-reading", (_event, payload) => registerRiskReadingCard(payload));
-  ipcMain.handle("anki:preview", async (_event, memo) => {
+  ipcMain.handle("anki:preview", async (_event, payload) => {
+    const memo = typeof payload === "object" && payload ? payload.memo : payload;
+    const frontNote = typeof payload === "object" && payload ? payload.frontNote : "";
     const scene = await captureScene();
     await ensureSimulation(scene);
     const images = currentCardImages || await prepareCardImages();
@@ -1205,7 +1213,7 @@ function registerIpc() {
       ...cardHtml(scene, currentSimulation, memo, {
         front: images.frontDataUrl,
         back: images.backDataUrl
-      }),
+      }, "preview", { frontNote }),
       duplicates,
       decks: deckChoices.decks,
       deckName: deckChoices.deckName,
@@ -1224,7 +1232,7 @@ function registerIpc() {
       frontName = await anki.storeImage(images.frontDataUrl, scene.sceneId, "front");
       backName = await anki.storeImage(images.backDataUrl, scene.sceneId, "back");
     } catch (error) {
-      throw new Error(`Anki邵ｺ・ｸ陞ｻﾂ鬮ｱ・｢騾包ｽｻ陷剃ｸ奇ｽ帝ｨｾ竏ｽ・ｿ・｡邵ｺ・ｧ邵ｺ髦ｪ竏ｪ邵ｺ蟶呻ｽ鍋ｸｺ・ｧ邵ｺ蜉ｱ笳・ｸｲ繝ｻ{error.message}`);
+      throw new Error(`Ankiにカード画像を保存できませんでした: ${error.message}`);
     }
     const tileCodes = new Set([
       scene.actualDiscard,
@@ -1247,13 +1255,13 @@ function registerIpc() {
         await anki.storeMedia(`bigcoach_tile_${filename}`, data);
       }
     } catch (error) {
-      throw new Error(`Anki邵ｺ・ｸ霑壽ｪ主愛陷剃ｸ奇ｽ帝ｨｾ竏ｽ・ｿ・｡邵ｺ・ｧ邵ｺ髦ｪ竏ｪ邵ｺ蟶呻ｽ鍋ｸｺ・ｧ邵ｺ蜉ｱ笳・ｸｲ繝ｻ{error.message}`);
+      throw new Error(`Ankiに牌画像を保存できませんでした: ${error.message}`);
     }
     try {
       const html = cardHtml(scene, currentSimulation, payload.memo || "", {
         front: frontName,
         back: backName
-      }, "anki");
+      }, "anki", { frontNote: payload.frontNote || "" });
       const registrationSettings = {
         ...settings,
         deckName: payload.deckName || settings.deckName
@@ -1266,7 +1274,7 @@ function registerIpc() {
         duplicateMode: payload.duplicateMode || "skip"
       });
     } catch (error) {
-      throw new Error(`Anki郢ｧ・ｫ郢晢ｽｼ郢晉判謔ｽ闖ｴ阮呻ｽ帝具ｽｻ鬪ｭ・ｲ邵ｺ・ｧ邵ｺ髦ｪ竏ｪ邵ｺ蟶呻ｽ鍋ｸｺ・ｧ邵ｺ蜉ｱ笳・ｸｲ繝ｻ{error.message}`);
+      throw new Error(`Ankiカードを登録できませんでした: ${error.message}`);
     }
   });
   ipcMain.handle("app:open-logs", () => shell.openPath(logPath));
@@ -1299,8 +1307,6 @@ async function createWindow() {
       nodeIntegration: false
     }
   });
-  await mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
-
   const bigCoachSession = session.fromPartition("persist:bigcoach");
   authSessionStore = new AuthSessionStore({
     electronSession: bigCoachSession,
@@ -1315,10 +1321,10 @@ async function createWindow() {
   mainWindow.contentView.addChildView(bigCoachView);
   layoutViews();
   mainWindow.on("resize", layoutViews);
-  await bigCoachView.webContents.loadURL(bigCoachUrl());
-  if (process.env.BIGCOACH_E2E_REVIEW_URL) {
-    await loadBigCoachReviewUrl(process.env.BIGCOACH_E2E_REVIEW_URL);
-  }
+  const initialUrl = process.env.BIGCOACH_E2E_REVIEW_URL || bigCoachUrl();
+  bigCoachView.webContents.loadURL(initialUrl)
+    .catch((error) => log(`initial BigCoach loadURL reported ${error.code || error.message} for ${initialUrl}`));
+  await mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
 app.whenReady().then(async () => {

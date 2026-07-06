@@ -43,7 +43,8 @@ async function main() {
   if (!reviewUrl) throw new Error("Usage: node scripts/verify-packaged-app.js <debug-port> <review-url>");
 
   const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-  const bigCoachTarget = targets.find((item) => item.url.startsWith("https://review.bigcoach.work"));
+  const bigCoachTarget = targets.find((item) =>
+    item.url.startsWith("https://gokujan.com") || item.url.startsWith("https://review.bigcoach.work"));
   const panelTarget = targets.find((item) => item.url.includes("/src/renderer/index.html"));
   if (!bigCoachTarget || !panelTarget) throw new Error("Required Electron targets not found");
 
@@ -54,8 +55,7 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, 2500));
     const scene = await panel.evaluate("window.bigcoachApp.refreshScene()");
     const simulation = await panel.evaluate("window.bigcoachApp.runSimulation()");
-    const preview = await panel.evaluate("window.bigcoachApp.previewCard('verification')");
-    const diagnostics = await panel.evaluate("window.bigcoachApp.diagnose()");
+    const preview = await panel.evaluate("window.bigcoachApp.previewCard({ memo: 'verification', frontNote: 'verification' })");
     const status = await bigCoach.evaluate(`({
       url: location.href,
       textLength: document.body.innerText.length
@@ -75,7 +75,6 @@ async function main() {
         hasBackImage: /data:image\/png;base64,/.test(preview.back),
         duplicateCount: preview.duplicates?.length || 0
       },
-      diagnostics,
       status
     }, null, 2));
   } finally {

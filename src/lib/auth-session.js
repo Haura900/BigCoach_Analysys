@@ -5,7 +5,8 @@ const path = require("node:path");
 
 function isBigCoachCookie(cookie) {
   const domain = String(cookie?.domain || "").replace(/^\./, "").toLowerCase();
-  return domain === "bigcoach.work" || domain.endsWith(".bigcoach.work");
+  return domain === "bigcoach.work" || domain.endsWith(".bigcoach.work") ||
+    domain === "gokujan.com" || domain.endsWith(".gokujan.com");
 }
 
 function cookieSetDetails(cookie) {

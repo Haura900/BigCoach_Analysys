@@ -25,18 +25,22 @@ test("BigCoach remains visible until card image capture finishes", () => {
   assert.ok(showPreview < syncVisibility, "BigCoach should only be hidden after the preview dialog is open");
 });
 
-test("Anki card section is directly below scene navigation", () => {
+test("slim UI keeps only card, URL, scene, and simulator sections", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "renderer", "index.html"),
     "utf8"
   );
-  const navigation = source.indexOf("<h2>局面移動</h2>");
-  const anki = source.indexOf("<h2>Ankiカード</h2>");
+  const anki = source.indexOf("<h2>Ankiカード登録</h2>");
   const reviewUrl = source.indexOf("<h2>解析済みURLを開く</h2>");
+  const scene = source.indexOf("<h2>現在の局面</h2>");
+  const simulator = source.indexOf("何切るシミュレーターを実行");
 
-  assert.ok(navigation >= 0);
-  assert.ok(anki > navigation);
+  assert.ok(anki >= 0);
   assert.ok(reviewUrl > anki);
+  assert.ok(scene > reviewUrl);
+  assert.ok(simulator > scene);
+  assert.equal(source.includes("<h2>局面移動</h2>"), false);
+  assert.equal(source.includes("シン悪手率"), false);
 });
 
 test("Anki registration waits until BigCoach is visible again", () => {
@@ -45,12 +49,47 @@ test("Anki registration waits until BigCoach is visible again", () => {
     "utf8"
   );
   const handlerStart = source.indexOf('$("#register-card").addEventListener');
-  const handlerEnd = source.indexOf('$("#open-logs").addEventListener', handlerStart);
+  const handlerEnd = source.indexOf('for (const dialog of $$("dialog"))', handlerStart);
   const handler = source.slice(handlerStart, handlerEnd);
 
   assert.match(handler, /await closeDialog\(dialog\)/);
-  assert.match(source, /async function closeDialog\(dialog\)[\s\S]*dialog\.close\(\)[\s\S]*await syncBigCoachVisibility\(\)/);
+  assert.match(source, /async function closeDialog\(dialog\)[\s\S]*dialog\.close\(\)[\s\S]*return syncBigCoachVisibility\(\)/);
   assert.match(source, /const overlayOpen = \$\$\("dialog"\)\.some\(\(dialog\) => dialog\.open\)/);
+});
+
+test("Anki registration button does not submit/close before async registration", () => {
+  const html = fs.readFileSync(
+    path.join(__dirname, "..", "src", "renderer", "index.html"),
+    "utf8"
+  );
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "renderer", "renderer.js"),
+    "utf8"
+  );
+  const handlerStart = source.indexOf('$("#register-card").addEventListener');
+  const handlerEnd = source.indexOf('for (const dialog of $$("dialog"))', handlerStart);
+  const handler = source.slice(handlerStart, handlerEnd);
+
+  assert.match(html, /id="register-card"[^>]*type="button"/);
+  assert.match(handler, /event\.preventDefault\(\)/);
+  assert.match(handler, /await window\.bigcoachApp\.registerCard/);
+  assert.match(handler, /resetNormalCardForm\(\)/);
+  assert.match(handler, /await closeDialog\(dialog\)/);
+  const normalRegister = handler.indexOf("await window.bigcoachApp.registerCard");
+  const normalReset = handler.indexOf("resetNormalCardForm()", normalRegister);
+  const normalClose = handler.indexOf("await closeDialog(dialog)", normalReset);
+  assert.ok(normalRegister >= 0);
+  assert.ok(normalReset > normalRegister);
+  assert.ok(normalClose > normalReset);
+});
+
+test("programmatic dialog close skips duplicate overlay synchronization", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "renderer", "renderer.js"),
+    "utf8"
+  );
+  assert.match(source, /dialog\.dataset\.skipCloseSync = "1"[\s\S]*dialog\.close\(\)[\s\S]*return syncBigCoachVisibility\(\)/);
+  assert.match(source, /if \(dialog\.dataset\.skipCloseSync === "1"\)[\s\S]*return;/);
 });
 
 test("card capture restores initial AI state and hides opponent hands", () => {
@@ -92,7 +131,7 @@ test("front card visual state accepts hidden AI and hidden opponent hands", () =
   assert.match(helper, /state\.opponentsHidden/);
 });
 
-test("modern card capture uses BigCoach display checkboxes", () => {
+test("modern card capture uses BigCoach keyboard shortcuts and checkboxes for state", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "bigcoach-adapter.js"),
     "utf8"
@@ -104,13 +143,17 @@ test("modern card capture uses BigCoach display checkboxes", () => {
   const prepareEnd = source.indexOf("async function restoreCapture", prepareStart);
   const prepare = source.slice(prepareStart, prepareEnd);
   const controlsStart = source.lastIndexOf("function modernControls");
-  const controlsEnd = source.indexOf("async function setModernCheckbox", controlsStart);
+  const controlsEnd = source.indexOf("function dispatchModernShortcut", controlsStart);
   const controls = source.slice(controlsStart, controlsEnd);
 
   assert.match(source, /function findModernCheckbox/);
   assert.match(source, /function setModernDisplayState/);
   assert.match(controls, /AI\(\?:表示\|Analysis\|解析\)\?/);
   assert.match(controls, /手牌表示\|手牌\|Hands\?/);
+  assert.match(source, /function dispatchModernShortcut/);
+  assert.match(source, /setModernShortcutState\(controls\.ai, expected\.showMortal, "m"\)/);
+  assert.match(source, /setModernShortcutState\(controls\.hands, expected\.showHands, "h"\)/);
+  assert.doesNotMatch(source, /input\.click\(\)/);
   assert.match(render, /setModernDisplayState/);
   assert.match(prepare, /setModernDisplayState/);
   assert.doesNotMatch(source, /closest\("div,li,section"\)/);
@@ -131,6 +174,29 @@ test("modern opponent hand visibility follows the hand display checkbox", () => 
   assert.match(helper, /: handChecked/);
   assert.match(helper, /opponentsHidden: handChecked === null/);
   assert.match(helper, /: !handChecked/);
+});
+
+test("modern capture waits up to one second only until display state changes", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "bigcoach-adapter.js"),
+    "utf8"
+  );
+  const displayStart = source.indexOf("async function setModernDisplayState");
+  const displayEnd = source.indexOf("function modernCaptureVisualState", displayStart);
+  const display = source.slice(displayStart, displayEnd);
+  const waitStart = source.indexOf("async function waitForModernDisplayState");
+  const waitEnd = source.indexOf("async function waitForVisualPaint", waitStart);
+  const wait = source.slice(waitStart, waitEnd);
+  const visualStart = source.indexOf("function modernCaptureVisualState");
+  const visualEnd = source.indexOf("function applyModernCaptureMode", visualStart);
+  const visual = source.slice(visualStart, visualEnd);
+
+  assert.match(display, /waitForModernDisplayState\(expected, 1000\)/);
+  assert.doesNotMatch(display, /setTimeout\(resolve,\s*1000\)/);
+  assert.match(wait, /Date\.now\(\) \+ timeoutMs/);
+  assert.match(wait, /displayStateMatches\(expected, state\)/);
+  assert.match(wait, /setTimeout\(resolve,\s*50\)/);
+  assert.doesNotMatch(visual, /aiChecked === false \? false/);
 });
 
 test("visual paint wait has a timeout fallback for throttled BigCoach frames", () => {
@@ -200,6 +266,7 @@ test("active Anki card HTML uses Japanese prompts and readable simulator table l
   const table = source.slice(tableStart, tableEnd);
 
   assert.match(card, /judgmentPrompt\(scene\)/);
+  assert.match(card, /frontNote/);
   assert.match(prompt, /何切？/);
   assert.match(prompt, /副露？/);
   assert.match(prompt, /リーチ？/);
@@ -227,5 +294,6 @@ test("Anki preview dialog exposes deck selection from preview result", () => {
   assert.match(html, /id="preview-deck"/);
   assert.match(renderer, /function renderPreviewDecks/);
   assert.match(renderer, /renderPreviewDecks\(preview\)/);
+  assert.match(renderer, /frontNote: \$\("#front-note"\)\.value/);
   assert.match(renderer, /deckName: \$\("#preview-deck"\)\.value/);
 });
