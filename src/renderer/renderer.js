@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { settings: null, scene: null, simulation: null, activeTab: "wall", history: [], tileImages: {} };
+const state = { settings: null, scene: null, simulation: null, activeTab: "wall", history: [], tileImages: {}, currentPreviewId: null };
 const HAND_SCORE_SETTING_KEYS = [
   "handScoreDoraSingle",
   "handScoreDoraPair",
@@ -122,24 +122,17 @@ function renderHandScore(result) {
   container.classList.remove("empty");
   container.innerHTML = `
     <div class="hand-score-main">
-      <strong>${score.score.toFixed(0)}点</strong>
+      <strong>${Number(score.score || 0).toFixed(0)}点</strong>
       <span>レベルアップ後概算スコア</span>
     </div>
     <div class="hand-score-grid">
-      <span>面子 <strong>${score.mentsuCount}</strong></span>
-      <span>両面 <strong>${score.ryanmenCount}</strong></span>
-      <span>カンチャン <strong>${score.kanchanCount}</strong></span>
-      <span>ペンチャン <strong>${score.penchanCount}</strong></span>
-      <span>対子 <strong>${score.toitsuCount}</strong></span>
-      <span>役牌対子 <strong>${score.yakuhaiPairs}</strong></span>
-      <span>役牌以外対子 <strong>${score.nonYakuhaiPairs}</strong></span>
-      <span>3個目以降 <strong>${score.excessPairs}</strong></span>
-      <span>ドラ枚数 <strong>${score.doraSingleCount}</strong></span>
-      <span>ドラ対子/ダブドラ <strong>${score.doraPairCount}</strong></span>
-      <span>ドラ点 <strong>${score.doraPoints}</strong></span>
-      <span>親番点 <strong>${score.dealerBonus}</strong></span>
-    </div>
-  `;
+      <span>面子 <strong>${score.mentsuCount ?? 0}</strong></span>
+      <span>両面 <strong>${score.ryanmenCount ?? 0}</strong></span>
+      <span>嵌張 <strong>${score.kanchanCount ?? 0}</strong></span>
+      <span>辺張 <strong>${score.penchanCount ?? 0}</strong></span>
+      <span>ドラ <strong>${score.doraCount ?? 0}</strong></span>
+      <span>対子 <strong>${score.pairCount ?? 0}</strong></span>
+    </div>`;
 }
 
 function analysisTable(analysis) {
@@ -190,7 +183,7 @@ function renderHistory(history) {
 
 function populateSettings() {
   const form = $("#settings-form");
-  for (const [key, value] of Object.entries(state.settings)) {
+  for (const [key, value] of Object.entries(state.settings || {})) {
     const input = form.elements.namedItem(key);
     if (!input) continue;
     if (input.type === "checkbox") input.checked = Boolean(value);
@@ -210,6 +203,7 @@ async function closeDialog(dialog) {
 }
 
 function resetNormalCardForm() {
+  state.currentPreviewId = null;
   $("#front-note").value = "";
   $("#memo").value = "";
   $("#front-preview").innerHTML = "";
@@ -283,7 +277,7 @@ $("#calculate-hand-score").addEventListener("click", () => action("配牌スコ�
   const result = await window.bigcoachApp.calculateHandScore();
   if (result.scene) renderScene(result.scene);
   renderHandScore(result);
-  toast(`配牌スコア: ${result.score.score.toFixed(0)}点`);
+  toast(`配牌スコア: ${Number(result.score?.score || 0).toFixed(0)}点`);
 }));
 
 $$(".tab").forEach((button) => button.addEventListener("click", () => {
@@ -323,6 +317,7 @@ $("#preview-card").addEventListener("click", async () => {
         frontNote: $("#front-note").value
       });
       if (preview.scene) renderScene(preview.scene);
+      state.currentPreviewId = preview.previewId;
       state.simulation = preview.simulation;
       renderComparison(preview.comparison);
       renderResults();
@@ -346,6 +341,7 @@ $("#preview-card").addEventListener("click", async () => {
 $("#preview-close").addEventListener("click", () => {
   const dialog = $("#preview-dialog");
   dialog.dataset.mode = "";
+  resetNormalCardForm();
   closeDialog(dialog).catch((error) => toast(error.message || String(error), true));
 });
 
@@ -353,22 +349,29 @@ let registeringCard = false;
 $("#register-card").addEventListener("click", (event) => {
   event.preventDefault();
   if (registeringCard) return;
+  const previewId = state.currentPreviewId;
+  if (!previewId) {
+    toast("プレビュー内容が見つかりません。もう一度プレビューしてください。", true);
+    return;
+  }
   registeringCard = true;
   $("#register-card").disabled = true;
-  action("Ankiへ登録中...", async () => {
-    const dialog = $("#preview-dialog");
-    const result = await window.bigcoachApp.registerCard({
-      memo: $("#memo").value,
-      frontNote: $("#front-note").value,
-      deckName: $("#preview-deck").value,
-      duplicateMode: $("#duplicate-mode").value
-    });
-    dialog.dataset.mode = "";
-    resetNormalCardForm();
-    await closeDialog(dialog);
+  const dialog = $("#preview-dialog");
+  const payload = {
+    previewId,
+    deckName: $("#preview-deck").value,
+    duplicateMode: $("#duplicate-mode").value
+  };
+  dialog.dataset.mode = "";
+  resetNormalCardForm();
+  closeDialog(dialog).catch((error) => toast(error.message || String(error), true));
+  toast("Anki登録を開始しました。完了まで他の操作を続けられます。");
+  window.bigcoachApp.registerCard(payload).then((result) => {
     if (result.skipped) toast("重複カードのため登録をスキップしました");
     else if (result.updated) toast(`既存カードを更新しました（ID: ${result.noteId}）`);
     else toast(`Ankiカードを登録しました（ID: ${result.noteId}）`);
+  }).catch((error) => {
+    toast(error.message || String(error), true);
   }).finally(() => {
     registeringCard = false;
     $("#register-card").disabled = false;

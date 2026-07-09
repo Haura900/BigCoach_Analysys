@@ -43,7 +43,7 @@ test("slim UI keeps only card, URL, scene, and simulator sections", () => {
   assert.equal(source.includes("シン悪手率"), false);
 });
 
-test("Anki registration waits until BigCoach is visible again", () => {
+test("Anki registration closes preview immediately and continues in background", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "renderer", "renderer.js"),
     "utf8"
@@ -52,12 +52,16 @@ test("Anki registration waits until BigCoach is visible again", () => {
   const handlerEnd = source.indexOf('for (const dialog of $$("dialog"))', handlerStart);
   const handler = source.slice(handlerStart, handlerEnd);
 
-  assert.match(handler, /await closeDialog\(dialog\)/);
+  assert.match(handler, /const previewId = state\.currentPreviewId/);
+  assert.match(handler, /closeDialog\(dialog\)\.catch/);
+  assert.match(handler, /window\.bigcoachApp\.registerCard\(payload\)\.then/);
+  assert.doesNotMatch(handler, /await window\.bigcoachApp\.registerCard/);
+  assert.doesNotMatch(handler, /await closeDialog\(dialog\)/);
   assert.match(source, /async function closeDialog\(dialog\)[\s\S]*dialog\.close\(\)[\s\S]*return syncBigCoachVisibility\(\)/);
   assert.match(source, /const overlayOpen = \$\$\("dialog"\)\.some\(\(dialog\) => dialog\.open\)/);
 });
 
-test("Anki registration button does not submit/close before async registration", () => {
+test("Anki registration button uses preview id and does not recapture from renderer flow", () => {
   const html = fs.readFileSync(
     path.join(__dirname, "..", "src", "renderer", "index.html"),
     "utf8"
@@ -72,15 +76,15 @@ test("Anki registration button does not submit/close before async registration",
 
   assert.match(html, /id="register-card"[^>]*type="button"/);
   assert.match(handler, /event\.preventDefault\(\)/);
-  assert.match(handler, /await window\.bigcoachApp\.registerCard/);
+  assert.match(handler, /previewId/);
+  assert.match(handler, /window\.bigcoachApp\.registerCard\(payload\)/);
   assert.match(handler, /resetNormalCardForm\(\)/);
-  assert.match(handler, /await closeDialog\(dialog\)/);
-  const normalRegister = handler.indexOf("await window.bigcoachApp.registerCard");
-  const normalReset = handler.indexOf("resetNormalCardForm()", normalRegister);
-  const normalClose = handler.indexOf("await closeDialog(dialog)", normalReset);
-  assert.ok(normalRegister >= 0);
-  assert.ok(normalReset > normalRegister);
+  const normalReset = handler.indexOf("resetNormalCardForm()");
+  const normalClose = handler.indexOf("closeDialog(dialog).catch", normalReset);
+  const normalRegister = handler.indexOf("window.bigcoachApp.registerCard(payload)", normalClose);
+  assert.ok(normalReset >= 0);
   assert.ok(normalClose > normalReset);
+  assert.ok(normalRegister > normalClose);
 });
 
 test("programmatic dialog close skips duplicate overlay synchronization", () => {
@@ -296,6 +300,29 @@ test("Anki preview dialog exposes deck selection from preview result", () => {
   assert.match(renderer, /renderPreviewDecks\(preview\)/);
   assert.match(renderer, /frontNote: \$\("#front-note"\)\.value/);
   assert.match(renderer, /deckName: \$\("#preview-deck"\)\.value/);
+});
+
+test("Anki registration reuses cached preview instead of recapturing BigCoach", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "main.js"),
+    "utf8"
+  );
+  const previewStart = source.indexOf('ipcMain.handle("anki:preview"');
+  const registerStart = source.indexOf('ipcMain.handle("anki:register"');
+  const registerEnd = source.indexOf('ipcMain.handle("app:open-logs"', registerStart);
+  const previewHandler = source.slice(previewStart, registerStart);
+  const registerHandler = source.slice(registerStart, registerEnd);
+
+  assert.match(previewHandler, /currentCardPreview = \{/);
+  assert.match(previewHandler, /previewId/);
+  assert.match(registerHandler, /const preview = currentCardPreview/);
+  assert.match(registerHandler, /preview\.previewId !== payload\.previewId/);
+  assert.match(registerHandler, /const scene = preview\.scene/);
+  assert.match(registerHandler, /const simulation = preview\.simulation/);
+  assert.match(registerHandler, /const images = preview\.images/);
+  assert.doesNotMatch(registerHandler, /captureScene\(\)/);
+  assert.doesNotMatch(registerHandler, /prepareCardImages\(\)/);
+  assert.doesNotMatch(registerHandler, /ensureSimulation/);
 });
 
 test("adapter execution reinjects stale BigCoach adapter before calling new methods", () => {

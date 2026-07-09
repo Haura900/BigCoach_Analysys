@@ -54,6 +54,7 @@ let currentSimulation;
 let currentMajorMistakes = [];
 let currentDecisions = [];
 let currentCardImages;
+let currentCardPreview;
 let currentRiskReadingPreview;
 let tileImageCache;
 let statsRefreshTimer;
@@ -274,6 +275,7 @@ function attachBigCoachViewEvents(view) {
         currentScene = null;
         currentSimulation = null;
         currentCardImages = null;
+        currentCardPreview = null;
         currentRiskReadingPreview = null;
         loadedReviewUrl = url;
       }
@@ -416,6 +418,7 @@ async function captureScene() {
   };
   currentSimulation = null;
   currentCardImages = null;
+  currentCardPreview = null;
   currentRiskReadingPreview = null;
   return currentScene;
 }
@@ -1324,27 +1327,47 @@ function registerIpc() {
     const frontNote = typeof payload === "object" && payload ? payload.frontNote : "";
     const scene = await captureScene();
     await ensureSimulation(scene);
-    const images = currentCardImages || await prepareCardImages();
+    currentCardImages = null;
+    const images = await prepareCardImages();
     const duplicates = await anki.findDuplicates(scene.sceneId, "BigCoach_ID").catch(() => []);
     const deckChoices = await ankiDeckChoices(settings.deckName);
-    return {
+    const html = cardHtml(scene, currentSimulation, memo, {
+      front: images.frontDataUrl,
+      back: images.backDataUrl
+    }, "preview", { frontNote });
+    const previewId = `${scene.sceneId}-${Date.now()}`;
+    currentCardPreview = {
+      previewId,
       scene,
-      ...cardHtml(scene, currentSimulation, memo, {
-        front: images.frontDataUrl,
-        back: images.backDataUrl
-      }, "preview", { frontNote }),
+      simulation: currentSimulation,
+      images,
+      memo: memo || "",
+      frontNote,
+      html,
+      comparison: comparisonStatus(scene, currentSimulation),
+      captureDiagnostics: images.captureDiagnostics
+    };
+    return {
+      previewId,
+      scene,
+      ...html,
       duplicates,
       decks: deckChoices.decks,
       deckName: deckChoices.deckName,
       simulation: currentSimulation,
-      comparison: comparisonStatus(scene, currentSimulation),
+      comparison: currentCardPreview.comparison,
       captureDiagnostics: images.captureDiagnostics
     };
   });
   ipcMain.handle("anki:register", async (_event, payload) => {
-    const scene = await captureScene();
-    await ensureSimulation(scene);
-    const images = currentCardImages || await prepareCardImages();
+    payload = payload || {};
+    const preview = currentCardPreview;
+    if (!preview || preview.previewId !== payload.previewId) {
+      throw new Error("プレビュー内容が見つかりません。もう一度カード内容をプレビューしてから登録してください。");
+    }
+    const scene = preview.scene;
+    const simulation = preview.simulation;
+    const images = preview.images;
     let frontName;
     let backName;
     try {
@@ -1356,13 +1379,13 @@ function registerIpc() {
     const tileCodes = new Set([
       scene.actualDiscard,
       scene.recommendedDiscard,
-      currentSimulation?.withWall?.recommendation,
-      currentSimulation?.withoutWall?.recommendation,
+      simulation?.withWall?.recommendation,
+      simulation?.withoutWall?.recommendation,
       ...scene.handTiles,
       ...scene.doraTiles,
       scene.roundWind,
       scene.seatWind,
-      ...[currentSimulation?.withWall, currentSimulation?.withoutWall].flatMap((analysis) =>
+      ...[simulation?.withWall, simulation?.withoutWall].flatMap((analysis) =>
         (analysis?.candidates || []).flatMap((candidate) =>
           [candidate.tile, ...(candidate.ukeire || []).map((item) => item.tile)]))
     ].filter((code) => safeTileFilename(code)));
@@ -1377,10 +1400,10 @@ function registerIpc() {
       throw new Error(`Ankiに牌画像を保存できませんでした: ${error.message}`);
     }
     try {
-      const html = cardHtml(scene, currentSimulation, payload.memo || "", {
+      const html = cardHtml(scene, simulation, preview.memo || "", {
         front: frontName,
         back: backName
-      }, "anki", { frontNote: payload.frontNote || "" });
+      }, "anki", { frontNote: preview.frontNote || "" });
       const registrationSettings = {
         ...settings,
         deckName: payload.deckName || settings.deckName
@@ -1394,6 +1417,9 @@ function registerIpc() {
       });
     } catch (error) {
       throw new Error(`Ankiカードを登録できませんでした: ${error.message}`);
+    } finally {
+      if (currentCardPreview?.previewId === payload.previewId) currentCardPreview = null;
+      currentCardImages = null;
     }
   });
   ipcMain.handle("app:open-logs", () => shell.openPath(logPath));
