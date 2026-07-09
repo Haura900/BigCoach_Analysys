@@ -50,6 +50,21 @@
     </section>
 
     <section>
+      <div class="section-title">
+        <h2>配牌スコア</h2>
+        <button id="calculate-hand-score" class="ghost small" type="button">計算</button>
+      </div>
+      <div id="hand-score-result" class="hand-score empty">局面を取得してから計算してください</div>
+    </section>
+
+    <section>
+      <h2>第一打データCSV</h2>
+      <p class="muted">各局の第一打について、手牌mpsz・和了率・ドラ表示牌・被副露・被立直をCSVへ追記します。</p>
+      <button id="stock-first-discards" class="primary action" type="button">各局第一打をCSVに保存</button>
+      <div id="first-discard-stock-status" class="definition">未保存</div>
+    </section>
+
+    <section>
       <button id="run-simulation" class="primary action" type="button">何切るシミュレーターを実行</button>
       <div id="comparison" class="comparison"></div>
       <div class="tabs">
@@ -64,11 +79,11 @@
   <dialog id="settings-dialog">
     <form method="dialog" id="settings-form">
       <h2>設定</h2>
-      <label>Ankiデッキ名 <input name="deckName" required></label>
-      <label>Ankiノートタイプ <input name="modelName" required></label>
-      <label>タグ（カンマ区切り） <input name="tags"></label>
+      <label>Ankiデッキ名<input name="deckName" required></label>
+      <label>Ankiノートタイプ<input name="modelName" required></label>
+      <label>タグ（カンマ区切り）<input name="tags"></label>
       <div class="form-grid">
-        <label>解析タイムアウト（秒） <input name="simulatorTimeoutSec" type="number" min="3" max="300"></label>
+        <label>解析タイムアウト（秒）<input name="simulatorTimeoutSec" type="number" min="3" max="300"></label>
       </div>
       <fieldset>
         <legend>何切るシミュレーター</legend>
@@ -77,6 +92,21 @@
         <label><input name="enableShantenDown" type="checkbox"> シャンテン戻し</label>
         <label><input name="enableTegawari" type="checkbox"> 手変わり</label>
         <label><input name="enableRiichi" type="checkbox"> リーチ</label>
+      </fieldset>
+      <fieldset class="score-settings">
+        <legend>配牌スコア計算</legend>
+        <div class="form-grid score-grid">
+          <label>ドラ1枚<input name="handScoreDoraSingle" type="number" step="1"></label>
+          <label>ドラ対子・ダブドラ<input name="handScoreDoraPair" type="number" step="1"></label>
+          <label>メンツ<input name="handScoreMentsu" type="number" step="1"></label>
+          <label>リャンメンターツ<input name="handScoreRyanmen" type="number" step="1"></label>
+          <label>カンチャンターツ<input name="handScoreKanchan" type="number" step="1"></label>
+          <label>ペンチャンターツ<input name="handScorePenchan" type="number" step="1"></label>
+          <label>役牌以外対子（2個目まで）<input name="handScoreNonYakuhaiPair" type="number" step="1"></label>
+          <label>3つ目以降の対子<input name="handScoreExcessPair" type="number" step="1"></label>
+          <label>役牌対子<input name="handScoreYakuhaiPair" type="number" step="1"></label>
+          <label>親番<input name="handScoreDealerBonus" type="number" step="1"></label>
+        </div>
       </fieldset>
       <menu>
         <button value="cancel" class="ghost">キャンセル</button>

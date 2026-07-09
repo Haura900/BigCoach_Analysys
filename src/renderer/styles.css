@@ -81,6 +81,16 @@ button.danger-action { width: 100%; margin-top: 9px; border-color: #8e4148; back
 .comparison { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 9px; }
 .comparison-item { background: #111821; border: 1px solid var(--border); border-radius: 7px; padding: 7px; text-align: center; }
 .comparison-item strong { display: block; font: 18px Consolas, monospace; margin-top: 3px; }
+.hand-score { margin-top: 8px; }
+.hand-score.empty { color: var(--muted); font-size: 12px; }
+.hand-score-main { display: flex; align-items: baseline; gap: 9px; margin-bottom: 8px; }
+.hand-score-main strong { color: var(--accent); font-size: 30px; line-height: 1; }
+.hand-score-main span { color: var(--muted); font-size: 12px; }
+.hand-score-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.hand-score-grid span { display: flex; justify-content: space-between; gap: 6px; border: 1px solid var(--border); border-radius: 7px; background: #111821; padding: 6px 7px; color: var(--muted); font-size: 11px; }
+.hand-score-grid strong { color: var(--text); font-family: Consolas, monospace; }
+.score-settings { display: block; }
+.score-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .match { color: var(--accent); }
 .mismatch { color: var(--danger); }
 .tabs { display: flex; gap: 4px; margin-top: 10px; }

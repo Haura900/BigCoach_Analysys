@@ -297,3 +297,31 @@ test("Anki preview dialog exposes deck selection from preview result", () => {
   assert.match(renderer, /frontNote: \$\("#front-note"\)\.value/);
   assert.match(renderer, /deckName: \$\("#preview-deck"\)\.value/);
 });
+
+test("adapter execution reinjects stale BigCoach adapter before calling new methods", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
+  const adapter = fs.readFileSync(path.join(__dirname, "..", "src", "bigcoach-adapter.js"), "utf8");
+  const executeStart = source.indexOf("async function executeAdapter");
+  const executeEnd = source.indexOf("async function ensureAdapter", executeStart);
+  const executeBody = source.slice(executeStart, executeEnd);
+  const ensureStart = executeEnd;
+  const ensureEnd = source.indexOf("async function waitForAnalysisReady", ensureStart);
+  const ensureBody = source.slice(ensureStart, ensureEnd);
+  assert.match(executeBody, /const frame = await ensureAdapter\(\)/);
+  assert.match(ensureBody, /listFirstDiscards/);
+  assert.match(ensureBody, /__version === '2026-07-06-first-discard-stock-winds'/);
+  assert.match(adapter, /__version: "2026-07-06-first-discard-stock-winds"/);
+  assert.match(adapter, /listFirstDiscards/);
+});
+
+test("first discard CSV includes round wind and seat wind columns", () => {
+  const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
+  const adapter = fs.readFileSync(path.join(__dirname, "..", "src", "bigcoach-adapter.js"), "utf8");
+  assert.match(main, /"round_wind"/);
+  assert.match(main, /"seat_wind"/);
+  assert.match(main, /round_wind: row\.roundWind/);
+  assert.match(main, /seat_wind: row\.seatWind/);
+  assert.match(main, /ensureFirstDiscardCsvHeader/);
+  assert.match(adapter, /roundWind: modernRoundWind\(gameInfo\)/);
+  assert.match(adapter, /seatWind: modernSeatWind\(gameInfo\)/);
+});

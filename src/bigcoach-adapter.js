@@ -174,6 +174,22 @@
     return { east: "東", south: "南", west: "西", north: "北" }[gameInfo?.game_info?.seat] || "東";
   }
 
+  function modernRoundWind(gameInfo) {
+    return { east: "1z", south: "2z", west: "3z", north: "4z" }[gameInfo?.game_info?.bakaze] || "1z";
+  }
+
+  function modernSeatWind(gameInfo) {
+    return { east: "1z", south: "2z", west: "3z", north: "4z" }[gameInfo?.game_info?.seat] || "1z";
+  }
+
+  function classicRoundWindCode(kyoku) {
+    const index = Number(kyoku || 0);
+    if (index < 4) return "1z";
+    if (index < 8) return "2z";
+    if (index < 12) return "3z";
+    return "4z";
+  }
+
   function modernOpenSetTiles(openSet) {
     if (!openSet) return [];
     if (Array.isArray(openSet.tiles)) return openSet.tiles.map(normalizeTile).filter(Boolean);
@@ -181,6 +197,78 @@
       return [openSet.pai, ...openSet.consumed].map(normalizeTile).filter(Boolean);
     }
     return [];
+  }
+
+  function codesToMpsz(codes) {
+    const buckets = { m: [], p: [], s: [], z: [] };
+    for (const code of codes || []) {
+      const tile = normalizeTile(code);
+      if (!tile) continue;
+      buckets[tile[1]]?.push(tile[0]);
+    }
+    return ["m", "p", "s", "z"]
+      .map((suit) => buckets[suit].sort((a, b) => Number(a || 5) - Number(b || 5)).join("") + (buckets[suit].length ? suit : ""))
+      .join("");
+  }
+
+  function firstNumericByKey(source, keyPattern, depth = 0, seen = new Set()) {
+    if (!source || typeof source !== "object" || depth > 4 || seen.has(source)) return null;
+    seen.add(source);
+    if (Array.isArray(source)) {
+      for (const item of source) {
+        const value = firstNumericByKey(item, keyPattern, depth + 1, seen);
+        if (value != null) return value;
+      }
+      return null;
+    }
+    for (const [key, value] of Object.entries(source)) {
+      if (keyPattern.test(key) && value != null && Number.isFinite(Number(value))) {
+        const numeric = Number(value);
+        return numeric > 1 ? numeric / 100 : numeric;
+      }
+    }
+    for (const value of Object.values(source)) {
+      const nested = firstNumericByKey(value, keyPattern, depth + 1, seen);
+      if (nested != null) return nested;
+    }
+    return null;
+  }
+
+  function winRateForEntry(entry) {
+    if (Array.isArray(entry?.sl_outcome) && entry.sl_outcome.length >= 2) {
+      const win = Number(entry.sl_outcome[0]) + Number(entry.sl_outcome[1]);
+      if (Number.isFinite(win)) return win;
+    }
+    const preferred = [
+      entry?.win_prob,
+      entry?.winProbability,
+      entry?.agari_prob,
+      entry?.agariProbability,
+      entry?.hora_prob,
+      entry?.horaProbability,
+      entry?.result?.win,
+      entry?.result?.agari,
+      entry?.outcomes?.win
+    ].find((value) => value != null && Number.isFinite(Number(value)));
+    if (preferred != null) {
+      const numeric = Number(preferred);
+      return numeric > 1 ? numeric / 100 : numeric;
+    }
+    const actualDetail = (entry?.details || []).find((item) => actionEquals(item.action, entry.actual));
+    const expectedDetail = (entry?.details || []).find((item) => actionEquals(item.action, entry.expected)) || entry?.details?.[0];
+    return firstNumericByKey(actualDetail, /^(win|agari|hora|和了).*?(prob|rate|率)?$/i) ??
+      firstNumericByKey(expectedDetail, /^(win|agari|hora|和了).*?(prob|rate|率)?$/i) ??
+      firstNumericByKey(entry, /^(win|agari|hora|和了).*?(prob|rate|率)?$/i);
+  }
+
+  function opponentRiichiFromGameInfo(gameInfo) {
+    return Boolean(gameInfo?.game_info?.riichi?.some((item, index) =>
+      index !== 0 && (item?.declared || item?.accepted)));
+  }
+
+  function opponentCalledFromGameInfo(gameInfo) {
+    return Boolean((gameInfo?.game_info?.other_hands || []).some((hand) =>
+      (hand?.open_sets || []).length));
   }
 
   function modernDecisionProbability(entry, action) {
@@ -981,6 +1069,90 @@
     };
   }
 
+  async function listFirstDiscards() {
+    if (isModernReviewPage()) {
+      const review = await loadModernReviewData();
+      const kyokus = review.data?.review?.kyokus || [];
+      const rows = [];
+      for (let kyokuIndex = 0; kyokuIndex < kyokus.length; kyokuIndex += 1) {
+        const kyoku = kyokus[kyokuIndex];
+        const entryIndex = (kyoku.entries || []).findIndex((entry) => {
+          const type = String(entry?.actual?.type || "");
+          return Boolean(actionLabel(entry?.actual)) && !["chi", "pon", "daiminkan", "ankan", "kakan", "reach"].includes(type);
+        });
+        if (entryIndex < 0) continue;
+        const entry = kyoku.entries[entryIndex];
+        const gameInfo = parseGameInfo(entry);
+        const handTiles = [...(entry.state?.tehai || [])].map(normalizeTile).filter(Boolean);
+        const doraTiles = [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean);
+        const winRate = winRateForEntry(entry);
+        const missing = [];
+        if (!handTiles.length) missing.push("hand_mpsz");
+        if (winRate == null) missing.push("win_rate");
+        if (!doraTiles.length) missing.push("dora_indicators");
+        rows.push({
+          rowKey: `${review.taskId}:${kyokuIndex}`,
+          taskId: review.taskId,
+          reviewUrl: location.href,
+          kyokuIndex,
+          entryIndex,
+          roundText: modernRoundLabel(gameInfo),
+          roundWind: modernRoundWind(gameInfo),
+          seatWind: modernSeatWind(gameInfo),
+          honba: Number(gameInfo?.game_info?.round?.honba ?? kyoku.honba ?? 0),
+          turn: Number(entry.junme || 1),
+          handMpsz: codesToMpsz(handTiles),
+          winRate,
+          doraIndicatorsMpsz: codesToMpsz(doraTiles),
+          calledByOpponents: opponentCalledFromGameInfo(gameInfo),
+          riichiByOpponents: opponentRiichiFromGameInfo(gameInfo),
+          actualDiscard: actionLabel(entry.actual),
+          recommendedDiscard: actionLabel(entry.expected),
+          missing
+        });
+      }
+      return rows;
+    }
+    const entries = await reviewedEntries();
+    const byRound = new Map();
+    for (const item of entries) {
+      if (byRound.has(item.kyokuIndex)) continue;
+      const tile = actionLabel(item.entry?.actual);
+      if (!tile) continue;
+      byRound.set(item.kyokuIndex, item);
+    }
+    return [...byRound.values()].map((item) => {
+      const entry = item.entry;
+      const handTiles = [...(entry?.state?.tehai || [])].map(normalizeTile).filter(Boolean);
+      const winRate = winRateForEntry(entry);
+      return {
+        rowKey: `${reviewTaskId() || location.href}:${item.kyokuIndex}`,
+        taskId: reviewTaskId() || "",
+        reviewUrl: location.href,
+        kyokuIndex: item.kyokuIndex,
+        entryIndex: item.entryIndex,
+        roundText: roundLabel(item.kyoku, item.honba),
+        roundWind: classicRoundWindCode(item.kyoku),
+        seatWind: "",
+        honba: item.honba,
+        turn: Number(entry?.junme || 1),
+        handMpsz: codesToMpsz(handTiles),
+        winRate,
+        doraIndicatorsMpsz: "",
+        calledByOpponents: false,
+        riichiByOpponents: false,
+        actualDiscard: actionLabel(entry?.actual),
+        recommendedDiscard: actionLabel(entry?.expected),
+        missing: [
+          ...(handTiles.length ? [] : ["hand_mpsz"]),
+          ...(winRate == null ? ["win_rate"] : []),
+          "seat_wind",
+          "classic_partial"
+        ]
+      };
+    });
+  }
+
   function dispatchModernShortcut(key) {
     const eventInit = {
       key,
@@ -1391,10 +1563,12 @@
   }
 
   window.__bigcoachDesktop = {
+    __version: "2026-07-06-first-discard-stock-winds",
     scrape,
     navigate,
     listMistakes,
     listDecisions,
+    listFirstDiscards,
     goToMismatch,
     goToPosition,
     captureVisualState,

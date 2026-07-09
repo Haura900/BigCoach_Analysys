@@ -210,6 +210,25 @@ async function dumpBigCoachDiagnostics() {
   }
 }
 
+async function poisonBigCoachAdapterForTest() {
+  const targets = await getJson(`http://127.0.0.1:${DEBUG_PORT}/json/list`);
+  const target = targets.find((item) =>
+    item.type === "page" && /^https:\/\/(?:gokujan\.com|review\.bigcoach\.work)\/review\//.test(item.url));
+  if (!target) throw new Error("BigCoach target not found for stale adapter test");
+  const page = new Cdp(target.webSocketDebuggerUrl);
+  try {
+    await page.connect();
+    await page.send("Runtime.enable");
+    await page.eval(`(() => {
+      window.__bigcoachDesktop = { __version: "old-test-adapter" };
+      return true;
+    })()`);
+  } finally {
+    page.close();
+  }
+}
+
+
 async function main() {
   const electron = path.join(ROOT, "node_modules", "electron", "dist", "electron.exe");
   const e2eUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bigcoach-e2e-"));
@@ -338,6 +357,37 @@ async function main() {
       backText: preview.backText.trim().slice(0, 240),
       deckCount: preview.deckCount
     }, null, 2));
+
+    if (process.env.VERIFY_FIRST_DISCARD_STOCK === "1") {
+      if (process.env.VERIFY_STALE_ADAPTER === "1") {
+        console.error("poisoning BigCoach adapter before stock button");
+        await poisonBigCoachAdapterForTest();
+      }
+      console.error("clicking first discard stock button");
+      await clickHandler(cdp, "#stock-first-discards");
+      const stocked = await waitFor(cdp, "first discard stocked", `() => {
+        const toast = document.querySelector("#toast");
+        const busy = !document.querySelector("#busy")?.classList.contains("hidden");
+        const status = document.querySelector("#first-discard-stock-status")?.textContent || "";
+        const error = toast && !toast.classList.contains("hidden") && toast.classList.contains("error")
+          ? toast.textContent
+          : "";
+        if (error) return { ok: false, error };
+        return {
+          ok: !busy && /対象 .* 件 .* 追加 .* 件/.test(status),
+          status
+        };
+      }`, 120000);
+      const csvPath = stocked.status.match(/保存先:\\s*(.+?first-discard-stock\\.csv)/)?.[1];
+      let header = "";
+      if (csvPath && fs.existsSync(csvPath)) {
+        header = fs.readFileSync(csvPath, "utf8").split(/\\r?\\n/, 1)[0] || "";
+        if (!header.includes("round_wind") || !header.includes("seat_wind")) {
+          throw new Error(`first discard CSV header does not include winds: ${header}`);
+        }
+      }
+      console.log(JSON.stringify({ firstDiscardStocked: true, status: stocked.status }, null, 2));
+    }
 
     if (process.env.VERIFY_ANKI_REGISTER === "1") {
       console.error("clicking register card");

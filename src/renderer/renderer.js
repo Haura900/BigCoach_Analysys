@@ -1,8 +1,18 @@
 "use strict";
 
-const state = { settings: null, scene: null, simulation: null, activeTab: "wall" };
-state.history = [];
-state.tileImages = {};
+const state = { settings: null, scene: null, simulation: null, activeTab: "wall", history: [], tileImages: {} };
+const HAND_SCORE_SETTING_KEYS = [
+  "handScoreDoraSingle",
+  "handScoreDoraPair",
+  "handScoreMentsu",
+  "handScoreRyanmen",
+  "handScoreKanchan",
+  "handScorePenchan",
+  "handScoreNonYakuhaiPair",
+  "handScoreExcessPair",
+  "handScoreYakuhaiPair",
+  "handScoreDealerBonus"
+];
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -81,10 +91,9 @@ function renderScene(scene) {
     `推奨 ${scene.recommendedDiscard || "取得なし"}`
   ];
   $("#scene-chips").innerHTML = chips.map((text) => `<span class="chip">${escapeHtml(text)}</span>`).join("");
-  const missing = $("#missing-info");
   const missingItems = scene?.missing || [];
-  missing.classList.toggle("hidden", !missingItems.length);
-  missing.textContent = missingItems.length
+  $("#missing-info").classList.toggle("hidden", !missingItems.length);
+  $("#missing-info").textContent = missingItems.length
     ? `取得できなかった情報: ${missingItems.join("、")}\n表示状態またはUI変更を確認してください。`
     : "";
   renderResults();
@@ -100,6 +109,37 @@ function renderComparison(comparison) {
     ["BigCoach", comparison.bigCoach],
     ["シミュレーター", comparison.simulator]
   ].map(([label, value]) => `<div class="comparison-item"><span>${label}</span><strong>${escapeHtml(value || "—")}</strong></div>`).join("");
+}
+
+function renderHandScore(result) {
+  const container = $("#hand-score-result");
+  if (!result?.score) {
+    container.classList.add("empty");
+    container.textContent = "局面を取得してから計算してください";
+    return;
+  }
+  const score = result.score;
+  container.classList.remove("empty");
+  container.innerHTML = `
+    <div class="hand-score-main">
+      <strong>${score.score.toFixed(0)}点</strong>
+      <span>レベルアップ後概算スコア</span>
+    </div>
+    <div class="hand-score-grid">
+      <span>面子 <strong>${score.mentsuCount}</strong></span>
+      <span>両面 <strong>${score.ryanmenCount}</strong></span>
+      <span>カンチャン <strong>${score.kanchanCount}</strong></span>
+      <span>ペンチャン <strong>${score.penchanCount}</strong></span>
+      <span>対子 <strong>${score.toitsuCount}</strong></span>
+      <span>役牌対子 <strong>${score.yakuhaiPairs}</strong></span>
+      <span>役牌以外対子 <strong>${score.nonYakuhaiPairs}</strong></span>
+      <span>3個目以降 <strong>${score.excessPairs}</strong></span>
+      <span>ドラ枚数 <strong>${score.doraSingleCount}</strong></span>
+      <span>ドラ対子/ダブドラ <strong>${score.doraPairCount}</strong></span>
+      <span>ドラ点 <strong>${score.doraPoints}</strong></span>
+      <span>親番点 <strong>${score.dealerBonus}</strong></span>
+    </div>
+  `;
 }
 
 function analysisTable(analysis) {
@@ -184,10 +224,7 @@ async function initialLoad() {
   document.documentElement.style.setProperty("--panel-width", `${state.settings.panelWidth}px`);
   window.bigcoachApp.setPanelWidth(state.settings.panelWidth);
   if (state.scene) renderScene(state.scene);
-  if (state.simulation) {
-    renderResults();
-    renderComparison();
-  }
+  if (state.simulation) renderResults();
   populateSettings();
   renderHistory(initial.history);
 }
@@ -224,6 +261,14 @@ $("#copy-hand-mpsz").addEventListener("click", async () => {
   }
 });
 
+$("#stock-first-discards").addEventListener("click", () => action("各局第一打データをCSVへ保存中...", async () => {
+  const result = await window.bigcoachApp.stockFirstDiscards();
+  $("#first-discard-stock-status").textContent =
+    `保存先: ${result.path}\n対象 ${result.total} 件 / 追加 ${result.added} 件 / 重複スキップ ${result.skipped} 件` +
+    (result.missingWinRate ? ` / 和了率未取得 ${result.missingWinRate} 件` : "");
+  toast(`第一打データをCSVに保存しました（追加 ${result.added} 件）`);
+}));
+
 $("#run-simulation").addEventListener("click", () => action("何切るシミュレーター実行中...", async () => {
   if (!state.scene) renderScene(await window.bigcoachApp.refreshScene());
   const result = await window.bigcoachApp.runSimulation();
@@ -232,6 +277,13 @@ $("#run-simulation").addEventListener("click", () => action("何切るシミュ�
   renderComparison(result.comparison);
   renderResults();
   toast("シミュレーターが完了しました");
+}));
+
+$("#calculate-hand-score").addEventListener("click", () => action("配牌スコアを計算中...", async () => {
+  const result = await window.bigcoachApp.calculateHandScore();
+  if (result.scene) renderScene(result.scene);
+  renderHandScore(result);
+  toast(`配牌スコア: ${result.score.score.toFixed(0)}点`);
 }));
 
 $$(".tab").forEach((button) => button.addEventListener("click", () => {
@@ -255,10 +307,12 @@ $("#settings-save").addEventListener("click", async (event) => {
     data[name] = form.elements.namedItem(name).checked;
   }
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
-  data.simulatorTimeoutSec = Number(data.simulatorTimeoutSec);
+  for (const name of ["simulatorTimeoutSec", ...HAND_SCORE_SETTING_KEYS]) {
+    data[name] = Number(data[name]);
+  }
   state.settings = await action("設定を保存中...", () => window.bigcoachApp.saveSettings(data));
   await closeDialog($("#settings-dialog"));
-  toast("設定を保存しました。");
+  toast("設定を保存しました");
 });
 
 $("#preview-card").addEventListener("click", async () => {

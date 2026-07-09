@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld("bigcoachApp", {
   openReviewUrl: (url) => ipcRenderer.invoke("bigcoach:open-url", url),
   getReviewHistory: () => ipcRenderer.invoke("bigcoach:history"),
   refreshScene: () => ipcRenderer.invoke("bigcoach:scene"),
+  stockFirstDiscards: () => ipcRenderer.invoke("bigcoach:stock-first-discards"),
+  calculateHandScore: () => ipcRenderer.invoke("bigcoach:hand-score"),
   runSimulation: () => ipcRenderer.invoke("simulator:run"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   previewCard: (payload) => ipcRenderer.invoke("anki:preview", payload),

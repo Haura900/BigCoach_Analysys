@@ -8,6 +8,7 @@ const { SimulatorService } = require("./lib/simulator");
 const { AnkiService } = require("./lib/anki");
 const { AuthSessionStore } = require("./lib/auth-session");
 const { tileFilename } = require("./lib/tiles");
+const { DEFAULT_HAND_SCORE_SETTINGS, SCORE_SETTING_KEYS, calculateHandScore } = require("./lib/hand-score");
 const {
   classifyShinMistake,
   classifyMajorMistake,
@@ -41,7 +42,8 @@ const DEFAULT_SETTINGS = {
   enableRiichi: false,
   simulatorTimeoutSec: 30,
   shinMistakeThreshold: 0.001,
-  panelWidth: 500
+  panelWidth: 500,
+  ...DEFAULT_HAND_SCORE_SETTINGS
 };
 
 let mainWindow;
@@ -81,6 +83,10 @@ function historyPath() {
   return path.join(app.getPath("userData"), "review-history.json");
 }
 
+function firstDiscardStockPath() {
+  return path.join(app.getPath("userData"), "first-discard-stock.csv");
+}
+
 function readJson(filePath, fallback) {
   try { return JSON.parse(fs.readFileSync(filePath, "utf8")); } catch { return fallback; }
 }
@@ -88,6 +94,105 @@ function readJson(filePath, fallback) {
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
+}
+
+const FIRST_DISCARD_CSV_COLUMNS = [
+  "row_key",
+  "task_id",
+  "review_url",
+  "kyoku_index",
+  "entry_index",
+  "round_text",
+  "round_wind",
+  "seat_wind",
+  "honba",
+  "turn",
+  "hand_mpsz",
+  "win_rate",
+  "dora_indicators_mpsz",
+  "called_by_opponents",
+  "riichi_by_opponents",
+  "actual_discard",
+  "recommended_discard",
+  "missing"
+];
+
+function csvEscape(value) {
+  if (value == null) return "";
+  const text = Array.isArray(value) ? value.join("|") : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function firstDiscardRowToCsv(row) {
+  const values = {
+    row_key: row.rowKey,
+    task_id: row.taskId,
+    review_url: row.reviewUrl,
+    kyoku_index: row.kyokuIndex,
+    entry_index: row.entryIndex,
+    round_text: row.roundText,
+    round_wind: row.roundWind,
+    seat_wind: row.seatWind,
+    honba: row.honba,
+    turn: row.turn,
+    hand_mpsz: row.handMpsz,
+    win_rate: row.winRate == null ? "" : Number(row.winRate).toFixed(6),
+    dora_indicators_mpsz: row.doraIndicatorsMpsz,
+    called_by_opponents: row.calledByOpponents ? "1" : "0",
+    riichi_by_opponents: row.riichiByOpponents ? "1" : "0",
+    actual_discard: row.actualDiscard,
+    recommended_discard: row.recommendedDiscard,
+    missing: row.missing || []
+  };
+  return FIRST_DISCARD_CSV_COLUMNS.map((column) => csvEscape(values[column])).join(",");
+}
+
+function existingFirstDiscardKeys(filePath) {
+  try {
+    return new Set(fs.readFileSync(filePath, "utf8")
+      .split(/\r?\n/)
+      .slice(1)
+      .filter(Boolean)
+      .map((line) => line.split(",", 1)[0].replace(/^"|"$/g, "").replace(/""/g, '"')));
+  } catch {
+    return new Set();
+  }
+}
+
+function ensureFirstDiscardCsvHeader(filePath) {
+  const header = `${FIRST_DISCARD_CSV_COLUMNS.join(",")}\n`;
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, header, "utf8");
+    return;
+  }
+  const currentHeader = fs.readFileSync(filePath, "utf8").split(/\r?\n/, 1)[0] || "";
+  if (currentHeader === FIRST_DISCARD_CSV_COLUMNS.join(",")) return;
+  const backupPath = `${filePath}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  fs.copyFileSync(filePath, backupPath);
+  fs.writeFileSync(filePath, header, "utf8");
+}
+
+async function stockFirstDiscards() {
+  const rows = await executeAdapter("window.__bigcoachDesktop.listFirstDiscards()");
+  if (!Array.isArray(rows) || !rows.length) {
+    throw new Error("各局の第一打データを取得できませんでした。解析結果URLを開いてから実行してください。");
+  }
+  const filePath = firstDiscardStockPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  ensureFirstDiscardCsvHeader(filePath);
+  const keys = existingFirstDiscardKeys(filePath);
+  const additions = rows.filter((row) => row?.rowKey && !keys.has(row.rowKey));
+  if (additions.length) {
+    fs.appendFileSync(filePath, `${additions.map(firstDiscardRowToCsv).join("\n")}\n`, "utf8");
+  }
+  return {
+    path: filePath,
+    total: rows.length,
+    added: additions.length,
+    skipped: rows.length - additions.length,
+    missingWinRate: rows.filter((row) => row.winRate == null).length,
+    rows
+  };
 }
 
 function loadSettings() {
@@ -104,10 +209,14 @@ function loadSettings() {
 }
 
 function saveSettings(next) {
+  const normalized = { ...next };
+  for (const key of SCORE_SETTING_KEYS) {
+    if (key in normalized) normalized[key] = Number(normalized[key]);
+  }
   settings = {
     ...settings,
-    ...next,
-    tags: Array.isArray(next.tags) ? next.tags.filter(Boolean) : settings.tags
+    ...normalized,
+    tags: Array.isArray(normalized.tags) ? normalized.tags.filter(Boolean) : settings.tags
   };
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), "utf8");
@@ -230,15 +339,19 @@ async function waitForAnalysisFrame(timeoutMs = 12000) {
 }
 
 async function executeAdapter(expression) {
-  const frame = await waitForAnalysisFrame();
+  const frame = await ensureAdapter();
   return frame.executeJavaScript(expression, true);
 }
 
 async function ensureAdapter() {
   if (!bigCoachView || bigCoachView.webContents.isDestroyed()) throw new Error("BigCoach display is not available.");
   const frame = await waitForAnalysisFrame();
-  const exists = await frame.executeJavaScript("Boolean(window.__bigcoachDesktop)", true);
+  const exists = await frame.executeJavaScript(
+    "Boolean(window.__bigcoachDesktop && window.__bigcoachDesktop.__version === '2026-07-06-first-discard-stock-winds' && typeof window.__bigcoachDesktop.listFirstDiscards === 'function')",
+    true
+  );
   if (!exists) await frame.executeJavaScript(adapterSource, true);
+  return frame;
 }
 
 async function waitForAnalysisReady(timeoutMs = 15000) {
@@ -1182,6 +1295,12 @@ function registerIpc() {
     return { url, history };
   });
   ipcMain.handle("bigcoach:history", () => readJson(historyPath(), []));
+  ipcMain.handle("bigcoach:stock-first-discards", () => stockFirstDiscards());
+  ipcMain.handle("bigcoach:hand-score", async () => {
+    const scene = currentScene || await captureScene();
+    currentScene = scene;
+    return { scene, score: calculateHandScore(scene, settings) };
+  });
   ipcMain.handle("bigcoach:reload", async () => {
     await bigCoachView.webContents.loadURL(bigCoachUrl());
     return true;
