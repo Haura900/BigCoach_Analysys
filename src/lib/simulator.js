@@ -6,6 +6,16 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { codesToIndices, windToIndex, removeKnownTiles, wallCounts } = require("./tiles");
 
+const MISSING_DLL_EXIT_CODE = 0xc0000135;
+
+function unsignedExitCode(code) {
+  return Number(code) >>> 0;
+}
+
+function formatExitCode(code) {
+  return `0x${unsignedExitCode(code).toString(16).padStart(8, "0").toUpperCase()}`;
+}
+
 class SimulatorService {
   constructor({ resourcesPath, log }) {
     this.resourcesPath = resourcesPath;
@@ -37,15 +47,41 @@ class SimulatorService {
     if (!fs.existsSync(this.executable)) {
       throw new Error("同梱の何切るシミュレーターが見つかりません。アプリを再インストールしてください。");
     }
-    this.process = spawn(this.executable, [String(this.port)], {
+    const child = spawn(this.executable, [String(this.port)], {
       cwd: this.directory,
       windowsHide: true,
       stdio: "ignore"
     });
-    this.process.once("error", (error) => this.log(`simulator spawn error: ${error.stack || error}`));
+    this.process = child;
+    let spawnError = null;
+    let exitResult = null;
+    let ready = false;
+    child.once("error", (error) => {
+      spawnError = error;
+      this.log(`simulator spawn error: ${error.stack || error}`);
+    });
+    child.once("exit", (code, signal) => {
+      exitResult = { code, signal };
+      if (this.process === child) this.process = null;
+      if (!ready) this.log(`simulator exited before ready: code=${code}, signal=${signal || "none"}`);
+    });
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
-      if (await this.isReady()) return;
+      if (await this.isReady()) {
+        ready = true;
+        return;
+      }
+      if (spawnError) {
+        throw new Error(`何切るシミュレーターを起動できませんでした: ${spawnError.message}`);
+      }
+      if (exitResult) {
+        const { code, signal } = exitResult;
+        if (code != null && unsignedExitCode(code) === MISSING_DLL_EXIT_CODE) {
+          throw new Error("何切るシミュレーターに必要なDLLが見つかりません。アプリを再インストールしてください。");
+        }
+        const detail = code == null ? `signal ${signal || "unknown"}` : formatExitCode(code);
+        throw new Error(`何切るシミュレーターが起動直後に終了しました (${detail})。詳細ログを確認してください。`);
+      }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     throw new Error("何切るシミュレーターを起動できませんでした。詳細ログを確認してください。");
@@ -153,4 +189,4 @@ class SimulatorService {
   }
 }
 
-module.exports = { SimulatorService };
+module.exports = { SimulatorService, formatExitCode };
