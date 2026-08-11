@@ -34,11 +34,15 @@ function normalizeScene(raw, url) {
   const callsBySeat = raw.callsBySeat || [[], [], [], []];
   const claimedBySeat = raw.claimedBySeat || [[], [], [], []];
   const discardsBySeat = raw.discardsBySeat || [[], [], [], []];
-  const callTiles = callsBySeat.flat();
-  const opponentCallTiles = callsBySeat.slice(1).flat();
+  const callTiles = Array.isArray(raw.callTiles) ? [...raw.callTiles] : callsBySeat.flat();
+  const opponentCallTiles = Array.isArray(raw.opponentCallTiles)
+    ? [...raw.opponentCallTiles]
+    : callsBySeat.slice(1).flat();
   const claimedTiles = claimedBySeat.flat();
-  const riverTiles = subtractTiles(discardsBySeat.flat(), claimedTiles);
-  const selfCallTiles = callsBySeat[0] || [];
+  const riverTiles = Array.isArray(raw.riverTiles)
+    ? [...raw.riverTiles]
+    : subtractTiles(discardsBySeat.flat(), claimedTiles);
+  const selfCallTiles = Array.isArray(raw.selfCallTiles) ? [...raw.selfCallTiles] : (callsBySeat[0] || []);
   const roundText = raw.roundText || "";
   const seatText = raw.seatText || "";
   const candidates = normalizeCandidates(raw.candidates || []);
@@ -73,7 +77,7 @@ function normalizeScene(raw, url) {
     callTiles,
     opponentCallTiles,
     selfCallTiles,
-    selfMelds: buildMelds(selfCallTiles),
+    selfMelds: Array.isArray(raw.selfMelds) ? raw.selfMelds : buildMelds(selfCallTiles),
     doraTiles: [...(raw.doraTiles || [])],
     roundText,
     honba: raw.honba ?? null,

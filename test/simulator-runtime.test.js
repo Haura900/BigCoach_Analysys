@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { formatExitCode } = require("../src/lib/simulator");
+const { SimulatorService, formatExitCode } = require("../src/lib/simulator");
 
 const simulatorDirectory = path.join(__dirname, "..", "resources", "simulator");
 
@@ -18,4 +18,19 @@ test("bundled simulator includes its app-local MSVC runtime", () => {
 
 test("Windows process exit codes are formatted as unsigned hexadecimal", () => {
   assert.equal(formatExitCode(-1073741515), "0xC0000135");
+});
+
+test("河・副露補正はポンされた牌3枚を山から除く", () => {
+  const simulator = new SimulatorService({ resourcesPath: "", log: () => {} });
+  const payload = simulator.buildPayload({
+    handTiles: ["7m", "7m", "7m", "7p", "8p", "1s", "1s", "3s", "0s", "6s", "9s", "9s", "3z", "9m"],
+    doraTiles: ["7m"],
+    riverTiles: ["9m", "6m", "1z"],
+    callTiles: ["2s", "2s", "2s"],
+    selfMelds: [],
+    roundWind: "2z",
+    seatWind: "2z"
+  }, {}, true);
+
+  assert.equal(payload.wall[19], 1);
 });

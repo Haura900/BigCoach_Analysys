@@ -27,3 +27,20 @@ test("局面を正規化して安定IDを作る", () => {
   assert.equal(scene.missing.length, 0);
   assert.equal(scene.sceneId.length, 20);
 });
+
+test("モダン画面が返す河と副露のフラット配列を保持する", () => {
+  const scene = normalizeScene({
+    ...raw,
+    riverTiles: ["9m", "4p"],
+    callTiles: ["2s", "2s", "2s"],
+    opponentCallTiles: ["2s", "2s", "2s"],
+    selfCallTiles: [],
+    selfMelds: []
+  }, "https://gokujan.com/review/test");
+
+  assert.deepEqual(scene.riverTiles, ["9m", "4p"]);
+  assert.deepEqual(scene.callTiles, ["2s", "2s", "2s"]);
+  assert.deepEqual(scene.opponentCallTiles, ["2s", "2s", "2s"]);
+  assert.deepEqual(scene.selfCallTiles, []);
+  assert.deepEqual(scene.selfMelds, []);
+});
