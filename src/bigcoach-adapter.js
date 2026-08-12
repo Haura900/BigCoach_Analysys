@@ -98,6 +98,33 @@
     return melds;
   }
 
+  const MODERN_MELD_TYPES = { pon: 0, chi: 1, ankan: 2, daiminkan: 3, kakan: 4 };
+
+  function modernMeldTileCodes(meld) {
+    const type = String(meld?.type || "").toLowerCase();
+    const expectedSize = ["ankan", "daiminkan", "kakan"].includes(type) ? 4 : 3;
+    const raw = Array.isArray(meld?.tiles)
+      ? meld.tiles
+      : [meld?.pai, ...(meld?.consumed || [])];
+    const tiles = raw.map(normalizeTile).filter(Boolean);
+    if (type === "ankan" && tiles.length > 0 && tiles.length < expectedSize) {
+      const concealedTile = normalizeForMeld(tiles[0]);
+      while (tiles.length < expectedSize) tiles.push(concealedTile);
+    }
+    return tiles.slice(0, expectedSize);
+  }
+
+  function buildModernMelds(fuuros) {
+    return [...(fuuros || [])].flatMap((meld) => {
+      const typeName = String(meld?.type || "").toLowerCase();
+      const type = MODERN_MELD_TYPES[typeName];
+      const tiles = modernMeldTileCodes(meld);
+      if (type == null || tiles.length < 3 ||
+          ([2, 3, 4].includes(type) && tiles.length !== 4)) return [];
+      return [{ type, tiles: tiles.map(tileIndex).filter((tile) => tile != null) }];
+    });
+  }
+
   function tileFromImage(image) {
     const source = String(image.currentSrc || image.src || "");
     const match = source.match(TILE_PATTERN) || source.match(MODERN_TILE_PATTERN);
@@ -170,16 +197,41 @@
     return `${bakaze}${Number(round.round || 1)}局`;
   }
 
-  function modernSeatLabel(gameInfo) {
-    return { east: "東", south: "南", west: "西", north: "北" }[gameInfo?.game_info?.seat] || "東";
+  function modernSeatKey(gameInfo) {
+    const value = gameInfo?.game_info?.seat;
+    const normalized = String(value ?? "").trim().toLowerCase();
+    const aliases = {
+      east: "east", south: "south", west: "west", north: "north",
+      e: "east", s: "south", w: "west", n: "north",
+      "1z": "east", "2z": "south", "3z": "west", "4z": "north",
+      "東": "east", "南": "south", "西": "west", "北": "north"
+    };
+    if (aliases[normalized]) return aliases[normalized];
+    if (Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 3) {
+      return ["east", "south", "west", "north"][Number(value)];
+    }
+    return null;
+  }
+
+  function modernPageSeatKey() {
+    const hero = document.querySelector('[class*="_hero_"] [class*="_wind_"]') ||
+      document.querySelector('[class*="_hero_"]');
+    const text = String(hero?.textContent || "").trim();
+    return { 東: "east", 南: "south", 西: "west", 北: "north" }[text[0]] || null;
+  }
+
+  function modernSeatLabel(gameInfo, usePageSeat = false) {
+    const seat = (usePageSeat ? modernPageSeatKey() : null) || modernSeatKey(gameInfo);
+    return { east: "東", south: "南", west: "西", north: "北" }[seat] || "";
   }
 
   function modernRoundWind(gameInfo) {
     return { east: "1z", south: "2z", west: "3z", north: "4z" }[gameInfo?.game_info?.bakaze] || "1z";
   }
 
-  function modernSeatWind(gameInfo) {
-    return { east: "1z", south: "2z", west: "3z", north: "4z" }[gameInfo?.game_info?.seat] || "1z";
+  function modernSeatWind(gameInfo, usePageSeat = false) {
+    const seat = (usePageSeat ? modernPageSeatKey() : null) || modernSeatKey(gameInfo);
+    return { east: "1z", south: "2z", west: "3z", north: "4z" }[seat] || "";
   }
 
   function classicRoundWindCode(kyoku) {
@@ -355,6 +407,22 @@
     return [...document.querySelectorAll('div[class*="ohand"]')].map((element) => imagesWithin(element).filter(Boolean));
   }
 
+  function modernCurrentRiverTiles() {
+    return [...document.querySelectorAll('div[class*="pond"] img')]
+      .filter((image) => !image.closest('div[class*="tileCalled"]'))
+      .map(tileFromImage)
+      .filter(Boolean);
+  }
+
+  function modernCurrentOpponentCallTiles() {
+    return [...document.querySelectorAll('div[class*="ohand"]')].map((hand) =>
+      [...hand.querySelectorAll('div[class*="meld"] img')].map(tileFromImage).filter(Boolean));
+  }
+
+  function modernCurrentDoraTiles() {
+    return imagesWithin(document.querySelector('div[class*="dora"]')).filter(Boolean);
+  }
+
   function modernCurrentCandidateRows() {
     const columns = [...document.querySelectorAll('div[class*="candCol"]')];
     const mainColumn = columns[0];
@@ -402,25 +470,36 @@
     const entry = target.entry;
     const gameInfo = target.gameInfo;
     const otherHands = modernCurrentOtherHands();
-    const otherHandSets = (gameInfo?.game_info?.other_hands || []).map((hand) =>
-      [...(hand.open_sets || [])].flatMap(modernOpenSetTiles)
-    );
-    const selfCallTiles = [...(entry.state?.fuuros || [])].flatMap((meld) => [meld.pai, ...(meld.consumed || [])].map(normalizeTile).filter(Boolean));
+    const currentOpponentCalls = modernCurrentOpponentCallTiles();
+    const otherHandSets = currentOpponentCalls.some((tiles) => tiles.length)
+      ? currentOpponentCalls
+      : (gameInfo?.game_info?.other_hands || []).map((hand) =>
+        [...(hand.open_sets || [])].flatMap(modernOpenSetTiles));
+    const selfFuuros = [...(entry.state?.fuuros || [])];
+    const selfCallTiles = selfFuuros.flatMap(modernMeldTileCodes);
     const opponentCallTiles = otherHandSets.flat();
+    const currentRiverTiles = modernCurrentRiverTiles();
+    const currentDoraTiles = modernCurrentDoraTiles();
     const raw = {
       title: "Mahjong Review",
       handTiles: [...(entry.state?.tehai || [])].map(normalizeTile).filter(Boolean),
       drawTile: entry.tile ? normalizeTile(entry.tile) : null,
-      riverTiles: [...(gameInfo?.game_info?.rivers || [])].flat().map(normalizeTile).filter(Boolean),
+      riverTiles: currentRiverTiles.length
+        ? currentRiverTiles
+        : [...(gameInfo?.game_info?.rivers || [])].flat().map(normalizeTile).filter(Boolean),
       callTiles: [selfCallTiles, ...otherHandSets].flat(),
       opponentCallTiles,
       selfCallTiles,
-      selfMelds: buildMelds(selfCallTiles),
-      doraTiles: [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
+      selfMelds: buildModernMelds(selfFuuros),
+      doraTiles: currentDoraTiles.length
+        ? currentDoraTiles
+        : [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
       roundText: modernRoundLabel(gameInfo),
       honba: Number(gameInfo?.game_info?.round?.honba || 0),
-      seatText: modernSeatLabel(gameInfo),
-      actorText: modernSeatLabel(gameInfo),
+      seatText: modernSeatLabel(gameInfo, true),
+      actorText: modernSeatLabel(gameInfo, true),
+      roundWind: modernRoundWind(gameInfo),
+      seatWind: modernSeatWind(gameInfo, true),
       tilesLeftText: String(gameInfo?.game_info?.tiles_left || entry.tiles_left || ""),
       currentTurn: Number(entry.junme || 0),
       scores: (gameInfo?.game_info?.scores || []).map((score) => Number(score)),
@@ -586,8 +665,7 @@
   }
 
   function meldTiles(entry) {
-    return (entry?.state?.fuuros || []).flatMap((meld) =>
-      [meld.pai, ...(meld.consumed || [])].map(normalizeTile).filter(Boolean));
+    return (entry?.state?.fuuros || []).flatMap(modernMeldTileCodes);
   }
 
   function candidateRows(entry) {
@@ -617,11 +695,17 @@
       const gameInfo = current?.gameInfo || parseGameInfo(entry);
       const currentHand = modernCurrentHandTiles().filter(Boolean);
       const otherHands = modernCurrentOtherHands();
-      const selfCallTiles = [...(entry?.state?.fuuros || [])].flatMap((meld) => [meld.pai, ...(meld.consumed || [])].map(normalizeTile).filter(Boolean));
+      const selfFuuros = [...(entry?.state?.fuuros || [])];
+      const selfCallTiles = selfFuuros.flatMap(modernMeldTileCodes);
+      const currentOpponentCalls = modernCurrentOpponentCallTiles();
+      const fallbackOpponentCalls = (gameInfo?.game_info?.other_hands || []).map((hand) =>
+        [...(hand.open_sets || [])].flatMap(modernOpenSetTiles));
       const callTilesBySeat = [
         selfCallTiles,
-        ...((gameInfo?.game_info?.other_hands || []).map((hand) => [...(hand.open_sets || [])].flatMap(modernOpenSetTiles)))
+        ...(currentOpponentCalls.some((tiles) => tiles.length) ? currentOpponentCalls : fallbackOpponentCalls)
       ];
+      const currentRiverTiles = modernCurrentRiverTiles();
+      const currentDoraTiles = modernCurrentDoraTiles();
       const handsBySeat = [currentHand.length ? currentHand : (entry?.state?.tehai || []).map(normalizeTile).filter(Boolean), ...otherHands];
       const scoreTexts = (gameInfo?.game_info?.scores || []).map((score, index) => {
         const seat = ["東", "南", "西", "北"][index] || `P${index}`;
@@ -631,16 +715,22 @@
         title: document.title,
         handTiles: currentHand.length ? currentHand : [...(entry?.state?.tehai || [])].map(normalizeTile).filter(Boolean),
         drawTile: entry?.tile ? normalizeTile(entry.tile) : null,
-        riverTiles: [...(gameInfo?.game_info?.rivers || [])].flat().map(normalizeTile).filter(Boolean),
+        riverTiles: currentRiverTiles.length
+          ? currentRiverTiles
+          : [...(gameInfo?.game_info?.rivers || [])].flat().map(normalizeTile).filter(Boolean),
         callTiles: callTilesBySeat.flat(),
         opponentCallTiles: callTilesBySeat.slice(1).flat(),
         selfCallTiles,
-        selfMelds: buildMelds(selfCallTiles),
-        doraTiles: [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
+        selfMelds: buildModernMelds(selfFuuros),
+        doraTiles: currentDoraTiles.length
+          ? currentDoraTiles
+          : [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
         roundText: current?.roundText || modernRoundLabel(gameInfo),
         honba: Number(gameInfo?.game_info?.round?.honba || 0),
-        seatText: modernSeatLabel(gameInfo),
-        actorText: modernSeatLabel(gameInfo),
+        seatText: modernSeatLabel(gameInfo, true),
+        actorText: modernSeatLabel(gameInfo, true),
+        roundWind: modernRoundWind(gameInfo),
+        seatWind: modernSeatWind(gameInfo, true),
         tilesLeftText: String(gameInfo?.game_info?.tiles_left || entry?.tiles_left || ""),
         currentTurn: Number(entry?.junme || 0),
         scores: (gameInfo?.game_info?.scores || []).map((score) => Number(score)),

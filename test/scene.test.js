@@ -24,6 +24,38 @@ test("局面を正規化して安定IDを作る", () => {
   const scene = validateScene(normalizeScene(raw, "https://gokujan.com/review/test"));
   assert.equal(scene.handMpsz, "123m456p789s11223z");
   assert.equal(scene.currentTurn, 3);
+  assert.equal(scene.remainingTiles, 60);
   assert.equal(scene.missing.length, 0);
   assert.equal(scene.sceneId.length, 20);
+});
+
+test("remaining live-wall count is retained separately from the displayed turn", () => {
+  const scene = normalizeScene({ ...raw, tilesLeftText: "remaining 22", turn: 16 },
+    "https://gokujan.com/review/test");
+  assert.equal(scene.remainingTiles, 22);
+  assert.equal(scene.currentTurn, 16);
+});
+
+test("explicit modern seat wind is not replaced by an East-looking label", () => {
+  const scene = normalizeScene({ ...raw, seatText: "東", seatWind: "3z", roundWind: "1z" },
+    "https://gokujan.com/review/3bbbd11acfa557b9");
+  assert.equal(scene.roundWind, "1z");
+  assert.equal(scene.seatWind, "3z");
+});
+
+test("モダン画面が返す河と副露のフラット配列を保持する", () => {
+  const scene = normalizeScene({
+    ...raw,
+    riverTiles: ["9m", "4p"],
+    callTiles: ["2s", "2s", "2s"],
+    opponentCallTiles: ["2s", "2s", "2s"],
+    selfCallTiles: [],
+    selfMelds: []
+  }, "https://gokujan.com/review/test");
+
+  assert.deepEqual(scene.riverTiles, ["9m", "4p"]);
+  assert.deepEqual(scene.callTiles, ["2s", "2s", "2s"]);
+  assert.deepEqual(scene.opponentCallTiles, ["2s", "2s", "2s"]);
+  assert.deepEqual(scene.selfCallTiles, []);
+  assert.deepEqual(scene.selfMelds, []);
 });

@@ -281,6 +281,15 @@ test("active Anki card HTML uses Japanese prompts and readable simulator table l
   assert.match(table, /和了率/);
   assert.match(table, /聴牌率/);
   assert.match(table, /受入/);
+  assert.match(table, /役別Shapley/);
+  assert.match(table, /出現率/);
+  assert.doesNotMatch(table, /<th>包含<\/th>/);
+  assert.doesNotMatch(table, /<th>限界<\/th>/);
+  assert.match(table, /commonScale/);
+  assert.match(table, /yakuChartContributions/);
+  assert.match(table, /entry\.shortName/);
+  assert.match(table, />\$\{escapeHtml\(label\)\}<\/span>/);
+  assert.match(table, /残差/);
   assert.match(table, /×\$\{item\.count\}/);
   assert.match(table, /\$\{candidate\.ukeireTotal\}枚/);
 });
@@ -341,6 +350,27 @@ test("adapter execution reinjects stale BigCoach adapter before calling new meth
   assert.match(adapter, /listFirstDiscards/);
 });
 
+test("the same yaku keeps the same chart color across discard rows", () => {
+  const projectRoot = path.join(__dirname, "..");
+  const mainSource = fs.readFileSync(path.join(projectRoot, "src", "main.js"), "utf8");
+  const rendererSource = fs.readFileSync(path.join(projectRoot, "src", "renderer", "renderer.js"), "utf8");
+  const rendererStyles = fs.readFileSync(path.join(projectRoot, "src", "renderer", "styles.css"), "utf8");
+  assert.match(mainSource, /yakuColor\(entry\)/);
+  assert.match(rendererSource, /yakuColor\(entry\)/);
+  assert.doesNotMatch(rendererStyles, /yaku-chart-segment:nth-child/);
+});
+
+test("modern concealed kans preserve their meld type and restore four tiles", () => {
+  const adapter = fs.readFileSync(
+    path.join(__dirname, "..", "src", "bigcoach-adapter.js"),
+    "utf8"
+  );
+  assert.match(adapter, /ankan:\s*2/);
+  assert.match(adapter, /buildModernMelds\(selfFuuros\)/);
+  assert.match(adapter, /type === "ankan".*tiles\.length < expectedSize/s);
+  assert.match(adapter, /while \(tiles\.length < expectedSize\) tiles\.push\(concealedTile\)/);
+});
+
 test("first discard CSV includes round wind and seat wind columns", () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
   const adapter = fs.readFileSync(path.join(__dirname, "..", "src", "bigcoach-adapter.js"), "utf8");
@@ -351,4 +381,24 @@ test("first discard CSV includes round wind and seat wind columns", () => {
   assert.match(main, /ensureFirstDiscardCsvHeader/);
   assert.match(adapter, /roundWind: modernRoundWind\(gameInfo\)/);
   assert.match(adapter, /seatWind: modernSeatWind\(gameInfo\)/);
+});
+
+test("modern review scene reads the hero seat and never defaults missing seat data to East", () => {
+  const adapter = fs.readFileSync(path.join(__dirname, "..", "src", "bigcoach-adapter.js"), "utf8");
+  assert.match(adapter, /function modernPageSeatKey\(\)/);
+  assert.match(adapter, /\[class\*="_hero_"\].*\[class\*="_wind_"\]/);
+  assert.match(adapter, /seatWind: modernSeatWind\(gameInfo, true\)/);
+  assert.doesNotMatch(adapter, /function modernSeatWind[\s\S]{0,350}\|\| "1z"/);
+});
+
+test("simulator shows called wins and conditional call details", () => {
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "src", "renderer", "renderer.js"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
+  for (const source of [renderer, main]) {
+    assert.match(source, /副露和了率/);
+    assert.match(source, /副露時の内訳/);
+    assert.match(source, /candidate\.callWinProbability/);
+    assert.match(source, /candidate\.calledYakuContributions/);
+    assert.match(source, /candidate\.callTileRates/);
+  }
 });

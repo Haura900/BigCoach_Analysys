@@ -12,12 +12,19 @@ function parseWind(text, fallback = "1z") {
   return fallback;
 }
 
+function parseRemainingTiles(tilesLeftText) {
+  const match = String(tilesLeftText || "").match(/\d+/);
+  if (!match) return null;
+  const remaining = Number(match[0]);
+  return Number.isFinite(remaining) ? Math.max(0, Math.min(70, Math.round(remaining))) : null;
+}
+
 function parseTurn(tilesLeftText, explicitTurn) {
   const explicit = Number(explicitTurn);
   if (Number.isFinite(explicit) && explicit > 0) return Math.min(18, Math.round(explicit));
-  const match = String(tilesLeftText || "").match(/\d+/);
-  if (!match) return 1;
-  return Math.max(1, Math.min(18, 18 - Math.floor(Number(match[0]) / 4)));
+  const remaining = parseRemainingTiles(tilesLeftText);
+  if (remaining != null) return Math.max(1, Math.min(18, 18 - Math.floor(remaining / 4)));
+  return 1;
 }
 
 function subtractTiles(base, subtract) {
@@ -34,23 +41,29 @@ function normalizeScene(raw, url) {
   const callsBySeat = raw.callsBySeat || [[], [], [], []];
   const claimedBySeat = raw.claimedBySeat || [[], [], [], []];
   const discardsBySeat = raw.discardsBySeat || [[], [], [], []];
-  const callTiles = callsBySeat.flat();
-  const opponentCallTiles = callsBySeat.slice(1).flat();
+  const callTiles = Array.isArray(raw.callTiles) ? [...raw.callTiles] : callsBySeat.flat();
+  const opponentCallTiles = Array.isArray(raw.opponentCallTiles)
+    ? [...raw.opponentCallTiles]
+    : callsBySeat.slice(1).flat();
   const claimedTiles = claimedBySeat.flat();
-  const riverTiles = subtractTiles(discardsBySeat.flat(), claimedTiles);
-  const selfCallTiles = callsBySeat[0] || [];
+  const riverTiles = Array.isArray(raw.riverTiles)
+    ? [...raw.riverTiles]
+    : subtractTiles(discardsBySeat.flat(), claimedTiles);
+  const selfCallTiles = Array.isArray(raw.selfCallTiles) ? [...raw.selfCallTiles] : (callsBySeat[0] || []);
   const roundText = raw.roundText || "";
   const seatText = raw.seatText || "";
   const candidates = normalizeCandidates(raw.candidates || []);
   const actualDiscard = raw.actualDiscard || null;
   const recommendedDiscard = raw.recommendedDiscard || candidates[0]?.tile || null;
-  const currentTurn = parseTurn(raw.tilesLeftText, raw.turn);
+  const remainingTiles = parseRemainingTiles(raw.tilesLeftText);
+  const currentTurn = parseTurn(raw.tilesLeftText, raw.turn ?? raw.currentTurn);
   const handsBySeat = Array.isArray(raw.handsBySeat) ? raw.handsBySeat : [];
   const identitySeed = JSON.stringify({
     url,
     roundText,
     seatText,
     currentTurn,
+    remainingTiles,
     handTiles,
     handsBySeat,
     selfCallTiles,
@@ -73,16 +86,17 @@ function normalizeScene(raw, url) {
     callTiles,
     opponentCallTiles,
     selfCallTiles,
-    selfMelds: buildMelds(selfCallTiles),
+    selfMelds: Array.isArray(raw.selfMelds) ? raw.selfMelds : buildMelds(selfCallTiles),
     doraTiles: [...(raw.doraTiles || [])],
     roundText,
     honba: raw.honba ?? null,
     seatText,
     actorText: raw.actorText || seatText,
-    roundWind: parseWind(roundText, "1z"),
-    seatWind: parseWind(seatText, "1z"),
+    roundWind: raw.roundWind || parseWind(roundText, "1z"),
+    seatWind: raw.seatWind || parseWind(seatText, "1z"),
     tilesLeftText: raw.tilesLeftText || "",
     currentTurn,
+    remainingTiles,
     scores: raw.scores || [],
     actualDiscard,
     recommendedDiscard,
@@ -152,4 +166,4 @@ function shinMistake(scene, settings) {
   };
 }
 
-module.exports = { parseWind, parseTurn, normalizeScene, validateScene, shinMistake };
+module.exports = { parseWind, parseRemainingTiles, parseTurn, normalizeScene, validateScene, shinMistake };

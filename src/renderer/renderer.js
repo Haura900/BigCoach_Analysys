@@ -64,6 +64,15 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function yakuColor(entry) {
+  if (entry?.yaku == null || entry?.isOther || entry?.name === "その他") return "#687386";
+  let hash = 2166136261;
+  for (const character of String(entry?.yaku ?? "unknown")) {
+    hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;
+  }
+  return `hsl(${hash % 360} 62% 55%)`;
+}
+
 function tile(code) {
   return code && state.tileImages[code]
     ? `<img class="tile-image" src="${state.tileImages[code]}" alt="${escapeHtml(code)}" title="${escapeHtml(code)}">`
@@ -137,13 +146,49 @@ function renderHandScore(result) {
 
 function analysisTable(analysis) {
   if (!analysis?.candidates?.length) return "<div class='empty'>候補なし</div>";
-  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th></tr></thead><tbody>${
+  const commonScale = Math.max(1, ...analysis.candidates.map((candidate) =>
+    Math.max(0, Number(candidate.shapleyTotal || 0))));
+  const contributionHtml = (candidate) => {
+    const entries = candidate.yakuContributions || [];
+    if (!entries.length) return "<span class='muted'>なし</span>";
+    const chartEntries = candidate.yakuChartContributions || entries.slice(0, 5);
+    const segments = chartEntries.map((entry) => {
+      const width = Math.max(0, Number(entry.shapley || 0)) / commonScale * 100;
+      const suffix = entry.count ? `（${entry.count}役）` : "";
+      const label = entry.shortName || Array.from(String(entry.name || "役")).slice(0, 2).join("");
+      return `<span class="yaku-chart-segment" style="width:${width.toFixed(4)}%;background:${yakuColor(entry)}" title="${escapeHtml(entry.name)}${suffix}: ${Number(entry.shapley).toFixed(1)}点">${escapeHtml(label)}</span>`;
+    }).join("");
+    const rows = entries.map((entry) =>
+      `<tr><td>${escapeHtml(entry.name)}</td><td>${(entry.occurrence * 100).toFixed(2)}%</td><td>${entry.shapley.toFixed(1)}</td></tr>`
+    ).join("");
+    const calledRows = (candidate.calledYakuContributions || []).map((entry) =>
+      `<tr><td>${escapeHtml(entry.name)}</td><td>${(entry.occurrence * 100).toFixed(2)}%</td><td>${entry.shapley.toFixed(1)}</td></tr>`
+    ).join("");
+    const calledTiles = (candidate.callTileRates || []).map((entry) =>
+      `<span>${tile(entry.tile)}<small>全体 ${(entry.probability * 100).toFixed(2)}% / 副露時 ${(entry.conditionalProbability * 100).toFixed(1)}%</small></span>`
+    ).join("");
+    const calledDetails = candidate.callProbability > 1e-12
+      ? `<h4>副露時の内訳 <small>副露発生 ${(candidate.callProbability * 100).toFixed(2)}%</small></h4>
+        <div class="ukeire-tiles">${calledTiles || "なし"}</div>
+        <table class="yaku-detail-table"><thead><tr><th>役</th><th>副露時出現率</th><th>副露時Shapley</th></tr></thead>
+          <tbody>${calledRows || '<tr><td colspan="3">該当役なし</td></tr>'}</tbody></table>`
+      : "";
+    const residual = Math.abs(Number(candidate.shapleyResidual || 0));
+    return `<div class="yaku-chart-track" aria-label="役別Shapley寄与。共通上限${commonScale.toFixed(1)}点">${segments}</div>
+      <details class="yaku-contributions"><summary>詳細</summary>
+        <table class="yaku-detail-table"><thead><tr><th>役</th><th>出現率</th><th>Shapley</th></tr></thead>
+          <tbody>${rows}</tbody><tfoot><tr><th>合計</th><td>期待値 ${candidate.expectedScore.toFixed(1)}</td><td>${candidate.shapleyTotal.toFixed(1)}</td></tr>
+          <tr><th>残差</th><td colspan="2">${residual.toFixed(4)}</td></tr></tfoot></table>${calledDetails}
+      </details>`;
+  };
+  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>副露和了率</th><th>受入</th><th>役別Shapley<small class="scale-label">共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${
     analysis.candidates.map((candidate, index) => `<tr class="${index === 0 ? "recommended" : ""}">
       <td>${tile(candidate.tile)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
       <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
       <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
+      <td>${(candidate.callWinProbability * 100).toFixed(2)}%</td>
       <td><div class="ukeire-tiles">${candidate.ukeire.map((item) =>
-        `<span>${tile(item.tile)}<small>×${item.count}</small></span>`).join("")}</div><small>${candidate.ukeireTotal}枚</small></td>
+        `<span>${tile(item.tile)}<small>×${item.count}</small></span>`).join("")}</div><small>${candidate.ukeireTotal}枚</small></td><td>${contributionHtml(candidate)}</td>
     </tr>`).join("")
   }</tbody></table>`;
 }
@@ -183,6 +228,17 @@ function renderHistory(history) {
 
 function populateSettings() {
   const form = $("#settings-form");
+  const hazards = Array.isArray(state.settings?.otherWinHazardPercent)
+    ? state.settings.otherWinHazardPercent
+    : [];
+  $("#other-win-hazard-grid").innerHTML = Array.from({ length: 6 }, (_, row) =>
+    [row + 1, row + 7, row + 13].map((turn) =>
+      `<td>${turn}</td><td><input name="otherWinHazardPercent_${turn}" type="number" min="0" max="100" step="0.01" value="${Number(hazards[turn - 1] ?? 0).toFixed(2)}"${turn === 18 ? " readonly" : ""}></td>`
+    ).join("")
+  ).map((cells) => `<tr>${cells}</tr>`).join("");
+  const turn17 = form.elements.namedItem("otherWinHazardPercent_17");
+  const turn18 = form.elements.namedItem("otherWinHazardPercent_18");
+  turn17?.addEventListener("input", () => { turn18.value = turn17.value; });
   for (const [key, value] of Object.entries(state.settings || {})) {
     const input = form.elements.namedItem(key);
     if (!input) continue;
@@ -297,13 +353,17 @@ $("#settings-save").addEventListener("click", async (event) => {
   const form = $("#settings-form");
   if (!form.reportValidity()) return;
   const data = Object.fromEntries(new FormData(form));
-  for (const name of ["enableRedDora", "enableUraDora", "enableShantenDown", "enableTegawari", "enableRiichi"]) {
+  for (const name of ["enableRedDora", "enableUraDora", "enableShantenDown", "enableTegawari", "autoDisableDeepSearch", "enableRiichi", "enableCalls", "enableOtherWinStop"]) {
     data[name] = form.elements.namedItem(name).checked;
   }
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
-  for (const name of ["simulatorTimeoutSec", ...HAND_SCORE_SETTING_KEYS]) {
+  for (const name of ["simulatorTimeoutSec", "tsumoWinSharePercent", ...HAND_SCORE_SETTING_KEYS]) {
     data[name] = Number(data[name]);
   }
+  data.otherWinHazardPercent = Array.from({ length: 18 }, (_, index) =>
+    Number(form.elements.namedItem(`otherWinHazardPercent_${index + 1}`).value));
+  data.otherWinHazardPercent[17] = data.otherWinHazardPercent[16];
+  for (let turn = 1; turn <= 18; ++turn) delete data[`otherWinHazardPercent_${turn}`];
   state.settings = await action("設定を保存中...", () => window.bigcoachApp.saveSettings(data));
   await closeDialog($("#settings-dialog"));
   toast("設定を保存しました");

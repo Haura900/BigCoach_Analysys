@@ -1,5 +1,12 @@
 # BigCoach Anki Studio
 
+## Simulator engine
+
+The bundled simulator is pinned by `engine-lock.json` to a tagged release of
+`Haura900/mahjong-cpp`. Run `npm run engine:update` to download and verify that
+exact Windows artifact. Engine updates are intentional: update the lock file,
+run the tests and smoke test, then build the installer.
+
 BigCoachの解析結果をアプリ内で表示し、現在局面の取得、何切るシミュレーション、比較表示、Ankiカード登録を一つのWindowsアプリで行います。
 
 ## 利用者向け
@@ -92,9 +99,14 @@ npm.cmd run dist
 
 `resources/simulator`にはmahjong-cpp `nanikiru.exe`の実行に必要なファイルを配置します。配布版はこのディレクトリを同梱し、アプリがバックグラウンドで自動起動します。
 
+同梱版はmahjong-cpp 0.9.8互換のregression-firstエンジンです。各打牌の期待値に加えて、包含寄与・限界寄与・厳密Shapley役寄与を計算します。候補表の「役別Shapley」を開くと、役別配分と総期待値との差を確認できます。設定の「和了のうちツモの割合」は100%で従来互換、30%なら`ron_rate=0.7`として計算します。
+
+既定では4シャンテン以上で探索量を抑えるため、シャンテン戻しと手変わりを自動的に無効化します。この挙動は設定の「4シャンテン以上で…自動OFF」で解除できます。巡目依存役の一発・海底摸月・河底撈魚は、リーチ直後状態と最終巡を区別するDPで期待値および役別Shapleyへ反映します。
+
 ## 技術上の注意
 
 - BigCoachの認証状態はElectronの永続セッション `persist:bigcoach` に保存されます。有効期限なしのログインCookieもWindows DPAPIで暗号化保存し、次回起動時に復元します。ログアウトした場合は保存内容も更新されます。
 - 何切る結果は、画面上の既知牌を残り牌から除いた結果と、補正しない結果を並べて保持します。
+- 同梱シミュレーターは、必要な Microsoft Visual C++ ランタイム DLL をアプリローカルで同梱します。
 - 重複判定は局面情報から生成した局面IDをAnkiタグへ保存して行います。
 - BigCoachそのものや解析AIは再実装していません。

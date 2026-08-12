@@ -26,8 +26,13 @@ if (process.env.BIGCOACH_E2E_USER_DATA_DIR) {
   app.setPath("userData", process.env.BIGCOACH_E2E_USER_DATA_DIR);
 }
 
+const DEFAULT_OTHER_WIN_HAZARD_PERCENT = [
+  0.02, 0.08, 0.29, 0.78, 1.70, 3.05, 4.67, 6.44, 8.23,
+  9.75, 11.08, 12.12, 12.76, 13.12, 13.23, 13.09, 11.70, 11.70
+];
+
 const DEFAULT_SETTINGS = {
-  settingsVersion: 4,
+  settingsVersion: 8,
   deckName: "BigCoach",
   riskReadingDeckName: "BigCoach::RiskReading",
   riskReadingNote: "相手の河から放銃危険度を読む。",
@@ -36,10 +41,15 @@ const DEFAULT_SETTINGS = {
   tags: ["BigCoach"],
   language: "ja",
   enableRedDora: true,
-  enableUraDora: false,
+  enableUraDora: true,
   enableShantenDown: true,
   enableTegawari: true,
-  enableRiichi: false,
+  autoDisableDeepSearch: true,
+  enableRiichi: true,
+  enableCalls: false,
+  enableOtherWinStop: true,
+  otherWinHazardPercent: DEFAULT_OTHER_WIN_HAZARD_PERCENT,
+  tsumoWinSharePercent: 100,
   simulatorTimeoutSec: 30,
   shinMistakeThreshold: 0.001,
   panelWidth: 500,
@@ -202,7 +212,9 @@ function loadSettings() {
     if (!saved.settingsVersion || saved.settingsVersion < 2) {
       if (Number(saved.shinMistakeThreshold) === 0.1) saved.shinMistakeThreshold = 0.001;
     }
-    saved.settingsVersion = 4;
+    delete saved.enableProbabilityPruning;
+    delete saved.probabilityPruneThresholdPercent;
+    saved.settingsVersion = 8;
     return { ...DEFAULT_SETTINGS, ...saved };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -213,6 +225,21 @@ function saveSettings(next) {
   const normalized = { ...next };
   for (const key of SCORE_SETTING_KEYS) {
     if (key in normalized) normalized[key] = Number(normalized[key]);
+  }
+  if ("tsumoWinSharePercent" in normalized) {
+    normalized.tsumoWinSharePercent = Math.min(
+      100,
+      Math.max(0, Number(normalized.tsumoWinSharePercent))
+    );
+  }
+  if (Array.isArray(normalized.otherWinHazardPercent)) {
+    normalized.otherWinHazardPercent = DEFAULT_OTHER_WIN_HAZARD_PERCENT.map(
+      (fallback, index) => Math.min(
+        100,
+        Math.max(0, Number(normalized.otherWinHazardPercent[index] ?? fallback))
+      )
+    );
+    normalized.otherWinHazardPercent[17] = normalized.otherWinHazardPercent[16];
   }
   settings = {
     ...settings,
@@ -604,19 +631,57 @@ tileHtml = safeTileHtml;
 
 function candidateTable(title, analysis, mediaMode = "preview") {
   if (!analysis?.candidates?.length) return `<h3>${escapeHtml(title)}</h3><p>結果なし</p>`;
+  const commonScale = Math.max(1, ...analysis.candidates.map((candidate) =>
+    Math.max(0, Number(candidate.shapleyTotal || 0))));
+  const yakuColor = (entry) => {
+    if (entry?.yaku == null || entry?.isOther || entry?.name === "その他") return "#687386";
+    let hash = 2166136261;
+    for (const character of String(entry?.yaku ?? "unknown")) {
+      hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;
+    }
+    return `hsl(${hash % 360} 62% 55%)`;
+  };
+  const contributionHtml = (candidate) => {
+    const entries = candidate.yakuContributions || [];
+    if (!entries.length) return "なし";
+    const chartEntries = candidate.yakuChartContributions || entries.slice(0, 5);
+    const segments = chartEntries.map((entry) => {
+      const width = Math.max(0, Number(entry.shapley || 0)) / commonScale * 100;
+      const suffix = entry.count ? `（${entry.count}役）` : "";
+      const label = entry.shortName || Array.from(String(entry.name || "役")).slice(0, 2).join("");
+      return `<span title="${escapeHtml(entry.name)}${suffix}: ${Number(entry.shapley).toFixed(1)}点" style="display:flex;align-items:center;justify-content:center;width:${width.toFixed(4)}%;min-width:1px;height:18px;overflow:hidden;background:${yakuColor(entry)};border-right:1px solid #111;color:#fff;font-size:10px;font-weight:800;line-height:1;white-space:nowrap;text-shadow:0 1px 2px #000">${escapeHtml(label)}</span>`;
+    }).join("");
+    const rows = entries.map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${(entry.occurrence * 100).toFixed(2)}%</td><td>${entry.shapley.toFixed(1)}</td></tr>`).join("");
+    const calledRows = (candidate.calledYakuContributions || []).map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${(entry.occurrence * 100).toFixed(2)}%</td><td>${entry.shapley.toFixed(1)}</td></tr>`).join("");
+    const calledTiles = (candidate.callTileRates || []).map((entry) =>
+      `<span style="display:inline-flex;align-items:end">${tileHtml(entry.tile, mediaMode)}<small>全体 ${(entry.probability * 100).toFixed(2)}% / 副露時 ${(entry.conditionalProbability * 100).toFixed(1)}%</small></span>`
+    ).join("");
+    const calledDetails = candidate.callProbability > 1e-12
+      ? `<h4>副露時の内訳 <small>副露発生 ${(candidate.callProbability * 100).toFixed(2)}%</small></h4>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">${calledTiles || "なし"}</div>
+        <table style="font-size:11px;margin-top:4px"><thead><tr><th>役</th><th>副露時出現率</th><th>副露時Shapley</th></tr></thead><tbody>${calledRows || '<tr><td colspan="3">該当役なし</td></tr>'}</tbody></table>`
+      : "";
+    const residual = Math.abs(Number(candidate.shapleyResidual || 0));
+    return `<div style="display:flex;width:220px;height:18px;overflow:hidden;border-radius:3px;background:#111">${segments}</div>
+      <details style="margin-top:4px"><summary>詳細</summary><table style="font-size:11px;margin-top:4px"><thead><tr><th>役</th><th>出現率</th><th>Shapley</th></tr></thead>
+      <tbody>${rows}</tbody><tfoot><tr><th>合計</th><td>期待値 ${candidate.expectedScore.toFixed(1)}</td><td>${candidate.shapleyTotal.toFixed(1)}</td></tr>
+      <tr><th>残差</th><td colspan="2">${residual.toFixed(4)}</td></tr></tfoot></table>${calledDetails}</details>`;
+  };
   const rows = analysis.candidates.map((candidate) => `
     <tr>
       <td>${tileHtml(candidate.tile, mediaMode)}</td>
       <td>${candidate.expectedScore.toFixed(0)}</td>
       <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
       <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
+      <td>${(candidate.callWinProbability * 100).toFixed(2)}%</td>
       <td>
         <div style="display:flex;flex-wrap:wrap;gap:2px">${(candidate.ukeire || []).map((item) =>
           `<span style="display:inline-flex;align-items:end">${tileHtml(item.tile, mediaMode)}<small>×${item.count}</small></span>`).join("")}</div>
         <div>${candidate.ukeireTotal}枚</div>
       </td>
+      <td style="white-space:normal">${contributionHtml(candidate)}</td>
     </tr>`).join("");
-  return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>副露和了率</th><th>受入</th><th>役別Shapley<br><small>共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function normalizeCaptureRect(rect) {
