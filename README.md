@@ -92,6 +92,8 @@ npm.cmd run dist
 
 `resources/simulator`にはmahjong-cpp `nanikiru.exe`の実行に必要なファイルを配置します。配布版はこのディレクトリを同梱し、アプリがバックグラウンドで自動起動します。
 
+同梱版はmahjong-cpp 0.9.8互換のregression-firstエンジンです。各打牌の期待値に加えて、包含寄与・限界寄与・厳密Shapley役寄与を計算します。候補表の「役別Shapley」を開くと、役別配分と総期待値との差を確認できます。設定の「和了のうちツモの割合」は100%で従来互換、30%なら`ron_rate=0.7`として計算します。
+
 ## 技術上の注意
 
 - BigCoachの認証状態はElectronの永続セッション `persist:bigcoach` に保存されます。有効期限なしのログインCookieもWindows DPAPIで暗号化保存し、次回起動時に復元します。ログアウトした場合は保存内容も更新されます。

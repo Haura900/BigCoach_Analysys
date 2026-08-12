@@ -6,6 +6,37 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { codesToIndices, windToIndex, removeKnownTiles, wallCounts } = require("./tiles");
 
+const YAKU_NAMES = new Map([
+  [2 ** 0, "門前清自摸和"], [2 ** 1, "リーチ"], [2 ** 2, "一発"],
+  [2 ** 3, "タンヤオ"], [2 ** 4, "ピンフ"], [2 ** 5, "一盃口"],
+  [2 ** 6, "槍槓"], [2 ** 7, "嶺上開花"], [2 ** 8, "海底摸月"],
+  [2 ** 9, "河底撈魚"], [2 ** 10, "ドラ"], [2 ** 11, "裏ドラ"],
+  [2 ** 12, "赤ドラ"], [2 ** 13, "白"], [2 ** 14, "發"], [2 ** 15, "中"],
+  [2 ** 16, "自風 東"], [2 ** 17, "自風 南"], [2 ** 18, "自風 西"],
+  [2 ** 19, "自風 北"], [2 ** 20, "場風 東"], [2 ** 21, "場風 南"],
+  [2 ** 22, "場風 西"], [2 ** 23, "場風 北"], [2 ** 24, "ダブルリーチ"],
+  [2 ** 25, "七対子"], [2 ** 26, "対々和"], [2 ** 27, "三暗刻"],
+  [2 ** 28, "三色同刻"], [2 ** 29, "三色同順"], [2 ** 30, "混老頭"],
+  [2 ** 31, "一気通貫"], [2 ** 32, "混全帯么九"], [2 ** 33, "小三元"],
+  [2 ** 34, "三槓子"], [2 ** 35, "混一色"], [2 ** 36, "純全帯么九"],
+  [2 ** 37, "二盃口"], [2 ** 38, "流し満貫"], [2 ** 39, "清一色"],
+  [2 ** 40, "天和"], [2 ** 41, "地和"], [2 ** 42, "人和"],
+  [2 ** 43, "緑一色"], [2 ** 44, "大三元"], [2 ** 45, "小四喜"],
+  [2 ** 46, "字一色"], [2 ** 47, "国士無双"], [2 ** 48, "九蓮宝燈"],
+  [2 ** 49, "四暗刻"], [2 ** 50, "清老頭"], [2 ** 51, "四槓子"],
+  [2 ** 52, "四暗刻単騎"], [2 ** 53, "大四喜"], [2 ** 54, "純正九蓮宝燈"],
+  [2 ** 55, "国士無双十三面"], [2 ** 56, "抜きドラ"]
+]);
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value)));
+}
+
+function yakuName(value) {
+  const numeric = Number(value);
+  return YAKU_NAMES.get(numeric) || `役 ${numeric}`;
+}
+
 const MISSING_DLL_EXIT_CODE = 0xc0000135;
 
 function unsignedExitCode(code) {
@@ -90,18 +121,22 @@ class SimulatorService {
   buildPayload(scene, settings, withWall) {
     if (!scene.handTiles.length) throw new Error("手牌を取得できていないため実行できません。");
     const payload = {
+      game_mode: 1,
       enable_reddora: Boolean(settings.enableRedDora),
       enable_uradora: Boolean(settings.enableUraDora),
       enable_shanten_down: Boolean(settings.enableShantenDown),
       enable_tegawari: Boolean(settings.enableTegawari),
       enable_riichi: Boolean(settings.enableRiichi),
+      calc_stats: true,
+      calc_yaku_stats: true,
+      calc_shapley_stats: true,
+      ron_rate: 1 - clamp(settings.tsumoWinSharePercent ?? 100, 0, 100) / 100,
       round_wind: windToIndex(scene.roundWind),
       dora_indicators: codesToIndices(scene.doraTiles),
       hand: codesToIndices(scene.handTiles),
-      hand_tiles: codesToIndices(scene.handTiles),
       melds: scene.selfMelds || [],
       seat_wind: windToIndex(scene.seatWind),
-      version: "0.9.1"
+      version: "0.9.8"
     };
     if (withWall) {
       const known = [
@@ -135,9 +170,9 @@ class SimulatorService {
   }
 
   parse(data, scene) {
-    const response = data.response || {};
+    const response = data.response || data || {};
     const shanten = response.shanten || {};
-    const turn = Math.max(1, Number(scene.currentTurn || 1));
+    const turn = clamp(scene.currentTurn || 1, 1, 18);
     const candidates = (response.stats || []).flatMap((stat) => {
       try {
         const tile = require("./tiles").normalizeTileCode(stat.tile);
@@ -149,14 +184,28 @@ class SimulatorService {
           }
         });
         const at = (values) => Number(values?.[turn] ?? 0);
+        const yakuContributions = (stat.yaku_stats || []).map((entry) => ({
+          yaku: Number(entry.yaku),
+          name: yakuName(entry.yaku),
+          inclusive: at(entry.inclusive_score),
+          marginal: at(entry.marginal_score),
+          shapley: at(entry.shapley_score)
+        })).filter((entry) => Math.abs(entry.inclusive) > 1e-9 ||
+          Math.abs(entry.marginal) > 1e-9 || Math.abs(entry.shapley) > 1e-9)
+          .sort((a, b) => b.shapley - a.shapley);
+        const expectedScore = at(stat.exp_score);
+        const shapleyTotal = yakuContributions.reduce((sum, entry) => sum + entry.shapley, 0);
         return [{
           tile,
           shanten: Number(stat.shanten ?? shanten.all ?? 99),
           ukeire,
           ukeireTotal: ukeire.reduce((sum, item) => sum + item.count, 0),
-          expectedScore: at(stat.exp_score),
+          expectedScore,
           winProbability: at(stat.win_prob),
-          tenpaiProbability: at(stat.tenpai_prob)
+          tenpaiProbability: at(stat.tenpai_prob),
+          yakuContributions,
+          shapleyTotal,
+          shapleyResidual: expectedScore - shapleyTotal
         }];
       } catch {
         return [];

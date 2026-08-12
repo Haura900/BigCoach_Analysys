@@ -281,6 +281,7 @@ test("active Anki card HTML uses Japanese prompts and readable simulator table l
   assert.match(table, /和了率/);
   assert.match(table, /聴牌率/);
   assert.match(table, /受入/);
+  assert.match(table, /役別Shapley/);
   assert.match(table, /×\$\{item\.count\}/);
   assert.match(table, /\$\{candidate\.ukeireTotal\}枚/);
 });

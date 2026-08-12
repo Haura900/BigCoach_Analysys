@@ -34,10 +34,19 @@ async function main() {
     if (!result.withWall.candidates.length || !result.withoutWall.candidates.length) {
       throw new Error("候補打牌が返りませんでした");
     }
+    const best = result.withWall.candidates[0];
+    if (!best.yakuContributions?.length) {
+      throw new Error("役別Shapley寄与が返りませんでした");
+    }
+    if (Math.abs(best.shapleyResidual) > 0.01) {
+      throw new Error(`Shapley配分が総期待値と一致しません: ${best.shapleyResidual}`);
+    }
     console.log(JSON.stringify({
       withWall: result.withWall.recommendation,
       withoutWall: result.withoutWall.recommendation,
-      candidates: result.withWall.candidates.length
+      candidates: result.withWall.candidates.length,
+      shapleyRoles: best.yakuContributions.length,
+      shapleyResidual: best.shapleyResidual
     }));
   } finally {
     if (owned) service.stop();

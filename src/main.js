@@ -27,7 +27,7 @@ if (process.env.BIGCOACH_E2E_USER_DATA_DIR) {
 }
 
 const DEFAULT_SETTINGS = {
-  settingsVersion: 4,
+  settingsVersion: 5,
   deckName: "BigCoach",
   riskReadingDeckName: "BigCoach::RiskReading",
   riskReadingNote: "相手の河から放銃危険度を読む。",
@@ -40,6 +40,7 @@ const DEFAULT_SETTINGS = {
   enableShantenDown: true,
   enableTegawari: true,
   enableRiichi: false,
+  tsumoWinSharePercent: 100,
   simulatorTimeoutSec: 30,
   shinMistakeThreshold: 0.001,
   panelWidth: 500,
@@ -202,7 +203,7 @@ function loadSettings() {
     if (!saved.settingsVersion || saved.settingsVersion < 2) {
       if (Number(saved.shinMistakeThreshold) === 0.1) saved.shinMistakeThreshold = 0.001;
     }
-    saved.settingsVersion = 4;
+    saved.settingsVersion = 5;
     return { ...DEFAULT_SETTINGS, ...saved };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -213,6 +214,12 @@ function saveSettings(next) {
   const normalized = { ...next };
   for (const key of SCORE_SETTING_KEYS) {
     if (key in normalized) normalized[key] = Number(normalized[key]);
+  }
+  if ("tsumoWinSharePercent" in normalized) {
+    normalized.tsumoWinSharePercent = Math.min(
+      100,
+      Math.max(0, Number(normalized.tsumoWinSharePercent))
+    );
   }
   settings = {
     ...settings,
@@ -604,6 +611,9 @@ tileHtml = safeTileHtml;
 
 function candidateTable(title, analysis, mediaMode = "preview") {
   if (!analysis?.candidates?.length) return `<h3>${escapeHtml(title)}</h3><p>結果なし</p>`;
+  const contributionHtml = (candidate) => (candidate.yakuContributions || [])
+    .map((entry) => `${escapeHtml(entry.name)} ${Number(entry.shapley).toFixed(1)}`)
+    .join(" / ") || "なし";
   const rows = analysis.candidates.map((candidate) => `
     <tr>
       <td>${tileHtml(candidate.tile, mediaMode)}</td>
@@ -615,8 +625,9 @@ function candidateTable(title, analysis, mediaMode = "preview") {
           `<span style="display:inline-flex;align-items:end">${tileHtml(item.tile, mediaMode)}<small>×${item.count}</small></span>`).join("")}</div>
         <div>${candidate.ukeireTotal}枚</div>
       </td>
+      <td style="white-space:normal">${contributionHtml(candidate)}</td>
     </tr>`).join("");
-  return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th><th>役別Shapley</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function normalizeCaptureRect(rect) {

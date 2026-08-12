@@ -137,13 +137,22 @@ function renderHandScore(result) {
 
 function analysisTable(analysis) {
   if (!analysis?.candidates?.length) return "<div class='empty'>候補なし</div>";
-  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th></tr></thead><tbody>${
+  const contributionHtml = (candidate) => {
+    const entries = candidate.yakuContributions || [];
+    if (!entries.length) return "<span class='muted'>なし</span>";
+    const rows = entries.map((entry) =>
+      `<div><span>${escapeHtml(entry.name)}</span><strong>${entry.shapley.toFixed(1)}</strong></div>`
+    ).join("");
+    const residual = Math.abs(Number(candidate.shapleyResidual || 0));
+    return `<details class="yaku-contributions"><summary>${escapeHtml(entries[0].name)} ${entries[0].shapley.toFixed(0)}</summary>${rows}<small>合計 ${candidate.shapleyTotal.toFixed(1)} / 差 ${residual.toFixed(4)}</small></details>`;
+  };
+  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th><th>役別Shapley</th></tr></thead><tbody>${
     analysis.candidates.map((candidate, index) => `<tr class="${index === 0 ? "recommended" : ""}">
       <td>${tile(candidate.tile)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
       <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
       <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
       <td><div class="ukeire-tiles">${candidate.ukeire.map((item) =>
-        `<span>${tile(item.tile)}<small>×${item.count}</small></span>`).join("")}</div><small>${candidate.ukeireTotal}枚</small></td>
+        `<span>${tile(item.tile)}<small>×${item.count}</small></span>`).join("")}</div><small>${candidate.ukeireTotal}枚</small></td><td>${contributionHtml(candidate)}</td>
     </tr>`).join("")
   }</tbody></table>`;
 }
@@ -301,7 +310,7 @@ $("#settings-save").addEventListener("click", async (event) => {
     data[name] = form.elements.namedItem(name).checked;
   }
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
-  for (const name of ["simulatorTimeoutSec", ...HAND_SCORE_SETTING_KEYS]) {
+  for (const name of ["simulatorTimeoutSec", "tsumoWinSharePercent", ...HAND_SCORE_SETTING_KEYS]) {
     data[name] = Number(data[name]);
   }
   state.settings = await action("設定を保存中...", () => window.bigcoachApp.saveSettings(data));
