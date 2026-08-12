@@ -175,9 +175,6 @@ class SimulatorService {
       auto_disable_deep_search: autoDisableDeepSearch,
       enable_riichi: Boolean(settings.enableRiichi),
       enable_calls: Boolean(settings.enableCalls),
-      enable_probability_pruning: Boolean(settings.enableProbabilityPruning),
-      probability_prune_threshold:
-        clamp(Number(settings.probabilityPruneThresholdPercent ?? 0.000001), 0.000001, 100) / 100,
       enable_other_win_stop: Boolean(settings.enableOtherWinStop),
       other_win_hazard: Array.from({ length: 18 }, (_, index) =>
         clamp(Number(settings.otherWinHazardPercent?.[index] ?? 0), 0, 100) / 100),

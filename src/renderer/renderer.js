@@ -341,11 +341,11 @@ $("#settings-save").addEventListener("click", async (event) => {
   const form = $("#settings-form");
   if (!form.reportValidity()) return;
   const data = Object.fromEntries(new FormData(form));
-  for (const name of ["enableRedDora", "enableUraDora", "enableShantenDown", "enableTegawari", "autoDisableDeepSearch", "enableRiichi", "enableCalls", "enableProbabilityPruning", "enableOtherWinStop"]) {
+  for (const name of ["enableRedDora", "enableUraDora", "enableShantenDown", "enableTegawari", "autoDisableDeepSearch", "enableRiichi", "enableCalls", "enableOtherWinStop"]) {
     data[name] = form.elements.namedItem(name).checked;
   }
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
-  for (const name of ["simulatorTimeoutSec", "tsumoWinSharePercent", "probabilityPruneThresholdPercent", ...HAND_SCORE_SETTING_KEYS]) {
+  for (const name of ["simulatorTimeoutSec", "tsumoWinSharePercent", ...HAND_SCORE_SETTING_KEYS]) {
     data[name] = Number(data[name]);
   }
   data.otherWinHazardPercent = Array.from({ length: 18 }, (_, index) =>

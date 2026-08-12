@@ -28,8 +28,6 @@ test("new simulator payload enables exact Shapley and maps tsumo share to ron ra
     enableTegawari: true,
     enableRiichi: true,
     enableCalls: true,
-    enableProbabilityPruning: true,
-    probabilityPruneThresholdPercent: 0.000002,
     tsumoWinSharePercent: 30
   }, false);
 
@@ -42,8 +40,6 @@ test("new simulator payload enables exact Shapley and maps tsumo share to ron ra
   assert.equal(payload.remaining_tiles, 69);
   assert.equal(payload.enable_riichi, true);
   assert.equal(payload.enable_calls, true);
-  assert.equal(payload.enable_probability_pruning, true);
-  assert.ok(Math.abs(payload.probability_prune_threshold - 0.00000002) < 1e-15);
   assert.equal(payload.enable_turn_yaku, true);
   assert.equal(payload.auto_disable_deep_search, true);
   assert.equal("hand_tiles" in payload, false);

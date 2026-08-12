@@ -19,7 +19,6 @@ const checkboxMappings = [
   ["autoDisableDeepSearch", "auto_disable_deep_search"],
   ["enableRiichi", "enable_riichi"],
   ["enableCalls", "enable_calls"],
-  ["enableProbabilityPruning", "enable_probability_pruning"],
   ["enableOtherWinStop", "enable_other_win_stop"]
 ];
 
@@ -41,7 +40,7 @@ test("other-player win hazard table is editable and mapped to the engine", () =>
 
 test("every simulator checkbox defaults to enabled", () => {
   for (const [setting] of checkboxMappings) {
-    if (setting === "enableCalls" || setting === "enableProbabilityPruning") continue;
+    if (setting === "enableCalls") continue;
     assert.match(main, new RegExp(`\\b${setting}: true[,\\n]`));
   }
 });
@@ -51,12 +50,4 @@ test("tsumo share is present, saved as a number, and mapped to ron_rate", () => 
   assert.match(renderer, /"tsumoWinSharePercent"/);
   assert.match(simulator, /settings\.tsumoWinSharePercent/);
   assert.match(simulator, /ron_rate/);
-});
-
-test("probability pruning has an independent toggle and editable threshold", () => {
-  assert.match(indexHtml, /name=["']enableProbabilityPruning["']/);
-  assert.match(indexHtml, /name=["']probabilityPruneThresholdPercent["']/);
-  assert.match(renderer, /"probabilityPruneThresholdPercent"/);
-  assert.match(simulator, /probability_prune_threshold/);
-  assert.match(main, /probabilityPruneThresholdPercent: 0\.000001/);
 });

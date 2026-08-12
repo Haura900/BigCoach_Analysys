@@ -32,7 +32,7 @@ const DEFAULT_OTHER_WIN_HAZARD_PERCENT = [
 ];
 
 const DEFAULT_SETTINGS = {
-  settingsVersion: 7,
+  settingsVersion: 8,
   deckName: "BigCoach",
   riskReadingDeckName: "BigCoach::RiskReading",
   riskReadingNote: "相手の河から放銃危険度を読む。",
@@ -47,8 +47,6 @@ const DEFAULT_SETTINGS = {
   autoDisableDeepSearch: true,
   enableRiichi: true,
   enableCalls: false,
-  enableProbabilityPruning: false,
-  probabilityPruneThresholdPercent: 0.000001,
   enableOtherWinStop: true,
   otherWinHazardPercent: DEFAULT_OTHER_WIN_HAZARD_PERCENT,
   tsumoWinSharePercent: 100,
@@ -214,7 +212,9 @@ function loadSettings() {
     if (!saved.settingsVersion || saved.settingsVersion < 2) {
       if (Number(saved.shinMistakeThreshold) === 0.1) saved.shinMistakeThreshold = 0.001;
     }
-    saved.settingsVersion = 7;
+    delete saved.enableProbabilityPruning;
+    delete saved.probabilityPruneThresholdPercent;
+    saved.settingsVersion = 8;
     return { ...DEFAULT_SETTINGS, ...saved };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -230,12 +230,6 @@ function saveSettings(next) {
     normalized.tsumoWinSharePercent = Math.min(
       100,
       Math.max(0, Number(normalized.tsumoWinSharePercent))
-    );
-  }
-  if ("probabilityPruneThresholdPercent" in normalized) {
-    normalized.probabilityPruneThresholdPercent = Math.min(
-      100,
-      Math.max(0.000001, Number(normalized.probabilityPruneThresholdPercent))
     );
   }
   if (Array.isArray(normalized.otherWinHazardPercent)) {
