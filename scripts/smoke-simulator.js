@@ -95,7 +95,7 @@ async function main() {
     const turnStat = turnResult.stats.find((stat) => stat.tile === 8);
     const turnYaku = new Map((turnStat?.yaku_stats || []).map((entry) => [Number(entry.yaku), entry]));
     for (const yaku of [2 ** 2, 2 ** 8]) {
-      if (!turnYaku.has(yaku) || Number(turnYaku.get(yaku).inclusive_score?.[1] || 0) <= 0) {
+      if (!turnYaku.has(yaku) || Number(turnYaku.get(yaku).occurrence_prob?.[1] || 0) <= 0) {
         throw new Error(`巡目役 ${yaku} が期待値へ反映されていません`);
       }
     }
