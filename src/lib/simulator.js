@@ -76,8 +76,6 @@ function aggregateYakuContributions(entries, limit = 5) {
     yaku: null,
     name: "その他",
     shortName: "\u4ed6",
-    inclusive: hidden.reduce((sum, entry) => sum + Number(entry.inclusive || 0), 0),
-    marginal: hidden.reduce((sum, entry) => sum + Number(entry.marginal || 0), 0),
     shapley: hidden.reduce((sum, entry) => sum + Number(entry.shapley || 0), 0),
     count: hidden.length
   }];
@@ -166,16 +164,16 @@ class SimulatorService {
 
   buildPayload(scene, settings, withWall) {
     if (!scene.handTiles.length) throw new Error("手牌を取得できていないため実行できません。");
-    const sceneShanten = Number(scene.shanten);
     const autoDisableDeepSearch = settings.autoDisableDeepSearch !== false;
-    const disableDeepSearchOptions = autoDisableDeepSearch && scene.shanten != null &&
-      Number.isFinite(sceneShanten) && sceneShanten >= 4;
     const payload = {
       game_mode: 1,
       enable_reddora: Boolean(settings.enableRedDora),
       enable_uradora: Boolean(settings.enableUraDora),
-      enable_shanten_down: Boolean(settings.enableShantenDown) && !disableDeepSearchOptions,
-      enable_tegawari: Boolean(settings.enableTegawari) && !disableDeepSearchOptions,
+      // The engine computes shanten from the actual hand and owns the automatic
+      // deep-search cutoff. BigCoach's displayed shanten can describe a different
+      // point in the review, so using it here can incorrectly remove valid routes.
+      enable_shanten_down: Boolean(settings.enableShantenDown),
+      enable_tegawari: Boolean(settings.enableTegawari),
       auto_disable_deep_search: autoDisableDeepSearch,
       enable_riichi: Boolean(settings.enableRiichi),
       enable_calls: Boolean(settings.enableCalls),
@@ -258,12 +256,9 @@ class SimulatorService {
             name,
             shortName: yakuShortName(entry.yaku, name),
             occurrence: at(entry.occurrence_prob),
-            inclusive: at(entry.inclusive_score),
-            marginal: at(entry.marginal_score),
             shapley: at(entry.shapley_score)
           };
-        }).filter((entry) => entry.occurrence > 1e-12 || Math.abs(entry.inclusive) > 1e-9 ||
-          Math.abs(entry.marginal) > 1e-9 || Math.abs(entry.shapley) > 1e-9)
+        }).filter((entry) => entry.occurrence > 1e-12 || Math.abs(entry.shapley) > 1e-9)
           .sort((a, b) => b.shapley - a.shapley);
         const calledYakuContributions = callProbability > 1e-12
           ? (stat.yaku_stats || []).map((entry) => {

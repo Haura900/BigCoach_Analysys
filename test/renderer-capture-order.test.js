@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-test("BigCoach remains visible until card image capture finishes", () => {
+test("card capture blocks first, then simulation continues in the background", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "renderer", "renderer.js"),
     "utf8"
@@ -13,15 +13,22 @@ test("BigCoach remains visible until card image capture finishes", () => {
   const handlerStart = source.indexOf('$("#preview-card").addEventListener');
   const handlerEnd = source.indexOf('$("#preview-close").addEventListener', handlerStart);
   const handler = source.slice(handlerStart, handlerEnd);
-  const capture = handler.indexOf("await window.bigcoachApp.previewCard");
+  const capture = handler.indexOf("await action");
+  const captureCall = handler.indexOf("window.bigcoachApp.captureCardPreview");
+  const backgroundSimulation = handler.indexOf("window.bigcoachApp.finishCardPreview");
   const showPreview = handler.indexOf('$("#preview-dialog").showModal()');
-  const syncVisibility = handler.indexOf("await syncBigCoachVisibility()");
+  const syncVisibility = handler.indexOf("await syncBigCoachVisibility()", showPreview);
 
   assert.notEqual(handlerStart, -1);
   assert.notEqual(capture, -1);
+  assert.notEqual(captureCall, -1);
+  assert.notEqual(backgroundSimulation, -1);
   assert.notEqual(showPreview, -1);
   assert.notEqual(syncVisibility, -1);
-  assert.ok(capture < showPreview, "card capture must finish before the preview opens");
+  assert.ok(capture < captureCall, "card image capture should be the blocking first stage");
+  assert.ok(captureCall < backgroundSimulation, "simulation must start after image capture");
+  assert.ok(backgroundSimulation < showPreview, "preview opens when background preparation finishes");
+  assert.doesNotMatch(handler, /await window\.bigcoachApp\.finishCardPreview/);
   assert.ok(showPreview < syncVisibility, "BigCoach should only be hidden after the preview dialog is open");
 });
 
@@ -311,17 +318,24 @@ test("Anki preview dialog exposes deck selection from preview result", () => {
   assert.match(renderer, /deckName: \$\("#preview-deck"\)\.value/);
 });
 
-test("Anki registration reuses cached preview instead of recapturing BigCoach", () => {
+test("Anki preview and registration reuse the staged card capture", () => {
   const source = fs.readFileSync(
     path.join(__dirname, "..", "src", "main.js"),
     "utf8"
   );
-  const previewStart = source.indexOf('ipcMain.handle("anki:preview"');
+  const captureStart = source.indexOf('ipcMain.handle("anki:capture-preview"');
+  const previewStart = source.indexOf('ipcMain.handle("anki:finish-preview"');
   const registerStart = source.indexOf('ipcMain.handle("anki:register"');
   const registerEnd = source.indexOf('ipcMain.handle("app:open-logs"', registerStart);
+  const captureHandler = source.slice(captureStart, previewStart);
   const previewHandler = source.slice(previewStart, registerStart);
   const registerHandler = source.slice(registerStart, registerEnd);
 
+  assert.match(captureHandler, /const scene = await captureScene\(\)/);
+  assert.match(captureHandler, /const images = await prepareCardImages\(\)/);
+  assert.match(captureHandler, /currentCardCapture = \{/);
+  assert.match(previewHandler, /const capture = currentCardCapture/);
+  assert.match(previewHandler, /const simulation = await analyzeScene\(scene\)/);
   assert.match(previewHandler, /currentCardPreview = \{/);
   assert.match(previewHandler, /previewId/);
   assert.match(registerHandler, /const preview = currentCardPreview/);

@@ -31,7 +31,7 @@ test("new simulator payload enables exact Shapley and maps tsumo share to ron ra
     tsumoWinSharePercent: 30
   }, false);
 
-  assert.equal(payload.version, "0.9.10");
+  assert.equal(payload.version, "0.9.11");
   assert.equal(payload.game_mode, 1);
   assert.equal(payload.calc_stats, true);
   assert.equal(payload.calc_yaku_stats, true);
@@ -96,7 +96,7 @@ test("concealed kan is sent as ankan with all four tiles", () => {
   assert.deepEqual(payload.melds, [{ type: 2, tiles: [17, 17, 17, 17] }]);
 });
 
-test("four shanten and deeper force shanten-down and tegawari off", () => {
+test("external scene shanten does not pre-disable engine deep-search options", () => {
   const settings = {
     enableShantenDown: true,
     enableTegawari: true
@@ -104,8 +104,9 @@ test("four shanten and deeper force shanten-down and tegawari off", () => {
   const fourShanten = service().buildPayload({ ...scene, shanten: 4 }, settings, false);
   const threeShanten = service().buildPayload({ ...scene, shanten: 3 }, settings, false);
 
-  assert.equal(fourShanten.enable_shanten_down, false);
-  assert.equal(fourShanten.enable_tegawari, false);
+  assert.equal(fourShanten.enable_shanten_down, true);
+  assert.equal(fourShanten.enable_tegawari, true);
+  assert.equal(fourShanten.auto_disable_deep_search, true);
   assert.equal(threeShanten.enable_shanten_down, true);
   assert.equal(threeShanten.enable_tegawari, true);
 });
@@ -151,8 +152,8 @@ test("new top-level response exposes additive yaku allocation", () => {
         { tile: 32, probability: [0, 0.10] }
       ],
       yaku_stats: [
-        { yaku: 1, occurrence_prob: [0, 0.125], inclusive_score: [0, 100], marginal_score: [0, 40], shapley_score: [0, 60], called_occurrence_prob: [0, 0.05], called_shapley_score: [0, 12.5] },
-        { yaku: 4096, occurrence_prob: [0, 0.5], inclusive_score: [0, 100], marginal_score: [0, 20], shapley_score: [0, 40], called_occurrence_prob: [0, 0.025], called_shapley_score: [0, 7.5] }
+        { yaku: 1, occurrence_prob: [0, 0.125], shapley_score: [0, 60], called_occurrence_prob: [0, 0.05], called_shapley_score: [0, 12.5] },
+        { yaku: 4096, occurrence_prob: [0, 0.5], shapley_score: [0, 40], called_occurrence_prob: [0, 0.025], called_shapley_score: [0, 7.5] }
       ]
     }]
   }, scene);
@@ -200,8 +201,6 @@ test("chart keeps the top five roles and combines the rest", () => {
   const entries = [7, 6, 5, 4, 3, 2, 1].map((shapley, index) => ({
     yaku: index + 1,
     name: `役${index + 1}`,
-    inclusive: shapley * 2,
-    marginal: shapley / 2,
     shapley
   }));
 
@@ -212,8 +211,6 @@ test("chart keeps the top five roles and combines the rest", () => {
     yaku: null,
     name: "その他",
     shortName: "\u4ed6",
-    inclusive: 6,
-    marginal: 1.5,
     shapley: 3,
     count: 2
   });
