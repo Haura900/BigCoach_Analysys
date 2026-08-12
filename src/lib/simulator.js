@@ -242,6 +242,8 @@ class SimulatorService {
           }
         });
         const at = (values) => Number(values?.[turn] ?? 0);
+        const callProbability = at(stat.call_prob);
+        const callWinProbability = at(stat.call_win_prob);
         const yakuContributions = (stat.yaku_stats || []).map((entry) => {
           const name = yakuName(entry.yaku);
           return {
@@ -256,6 +258,27 @@ class SimulatorService {
         }).filter((entry) => entry.occurrence > 1e-12 || Math.abs(entry.inclusive) > 1e-9 ||
           Math.abs(entry.marginal) > 1e-9 || Math.abs(entry.shapley) > 1e-9)
           .sort((a, b) => b.shapley - a.shapley);
+        const calledYakuContributions = callProbability > 1e-12
+          ? (stat.yaku_stats || []).map((entry) => {
+            const name = yakuName(entry.yaku);
+            return {
+              yaku: Number(entry.yaku),
+              name,
+              shortName: yakuShortName(entry.yaku, name),
+              occurrence: at(entry.called_occurrence_prob) / callProbability,
+              shapley: at(entry.called_shapley_score) / callProbability
+            };
+          }).filter((entry) => entry.occurrence > 1e-12 || Math.abs(entry.shapley) > 1e-9)
+            .sort((a, b) => b.shapley - a.shapley)
+          : [];
+        const callTileRates = callProbability > 1e-12
+          ? (stat.call_tile_stats || []).map((entry) => ({
+            tile: require("./tiles").normalizeTileCode(entry.tile),
+            probability: at(entry.probability),
+            conditionalProbability: at(entry.probability) / callProbability
+          })).filter((entry) => entry.probability > 1e-12)
+            .sort((a, b) => b.probability - a.probability)
+          : [];
         const expectedScore = at(stat.exp_score);
         const shapleyTotal = yakuContributions.reduce((sum, entry) => sum + entry.shapley, 0);
         return [{
@@ -266,8 +289,11 @@ class SimulatorService {
           expectedScore,
           winProbability: at(stat.win_prob),
           tenpaiProbability: at(stat.tenpai_prob),
-          callProbability: at(stat.call_prob),
+          callProbability,
+          callWinProbability,
+          callTileRates,
           yakuContributions,
+          calledYakuContributions,
           yakuChartContributions: aggregateYakuContributions(yakuContributions),
           shapleyTotal,
           shapleyResidual: expectedScore - shapleyTotal

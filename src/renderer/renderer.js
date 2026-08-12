@@ -161,20 +161,32 @@ function analysisTable(analysis) {
     const rows = entries.map((entry) =>
       `<tr><td>${escapeHtml(entry.name)}</td><td>${(entry.occurrence * 100).toFixed(2)}%</td><td>${entry.shapley.toFixed(1)}</td></tr>`
     ).join("");
+    const calledRows = (candidate.calledYakuContributions || []).map((entry) =>
+      `<tr><td>${escapeHtml(entry.name)}</td><td>${(entry.occurrence * 100).toFixed(2)}%</td><td>${entry.shapley.toFixed(1)}</td></tr>`
+    ).join("");
+    const calledTiles = (candidate.callTileRates || []).map((entry) =>
+      `<span>${tile(entry.tile)}<small>全体 ${(entry.probability * 100).toFixed(2)}% / 副露時 ${(entry.conditionalProbability * 100).toFixed(1)}%</small></span>`
+    ).join("");
+    const calledDetails = candidate.callProbability > 1e-12
+      ? `<h4>副露時の内訳 <small>副露発生 ${(candidate.callProbability * 100).toFixed(2)}%</small></h4>
+        <div class="ukeire-tiles">${calledTiles || "なし"}</div>
+        <table class="yaku-detail-table"><thead><tr><th>役</th><th>副露時出現率</th><th>副露時Shapley</th></tr></thead>
+          <tbody>${calledRows || '<tr><td colspan="3">該当役なし</td></tr>'}</tbody></table>`
+      : "";
     const residual = Math.abs(Number(candidate.shapleyResidual || 0));
     return `<div class="yaku-chart-track" aria-label="役別Shapley寄与。共通上限${commonScale.toFixed(1)}点">${segments}</div>
       <details class="yaku-contributions"><summary>詳細</summary>
         <table class="yaku-detail-table"><thead><tr><th>役</th><th>出現率</th><th>Shapley</th></tr></thead>
           <tbody>${rows}</tbody><tfoot><tr><th>合計</th><td>期待値 ${candidate.expectedScore.toFixed(1)}</td><td>${candidate.shapleyTotal.toFixed(1)}</td></tr>
-          <tr><th>残差</th><td colspan="2">${residual.toFixed(4)}</td></tr></tfoot></table>
+          <tr><th>残差</th><td colspan="2">${residual.toFixed(4)}</td></tr></tfoot></table>${calledDetails}
       </details>`;
   };
-  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>副露率</th><th>受入</th><th>役別Shapley<small class="scale-label">共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${
+  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>副露和了率</th><th>受入</th><th>役別Shapley<small class="scale-label">共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${
     analysis.candidates.map((candidate, index) => `<tr class="${index === 0 ? "recommended" : ""}">
       <td>${tile(candidate.tile)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
       <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
       <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
-      <td>${(candidate.callProbability * 100).toFixed(2)}%</td>
+      <td>${(candidate.callWinProbability * 100).toFixed(2)}%</td>
       <td><div class="ukeire-tiles">${candidate.ukeire.map((item) =>
         `<span>${tile(item.tile)}<small>×${item.count}</small></span>`).join("")}</div><small>${candidate.ukeireTotal}枚</small></td><td>${contributionHtml(candidate)}</td>
     </tr>`).join("")

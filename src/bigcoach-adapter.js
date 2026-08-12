@@ -197,16 +197,41 @@
     return `${bakaze}${Number(round.round || 1)}局`;
   }
 
-  function modernSeatLabel(gameInfo) {
-    return { east: "東", south: "南", west: "西", north: "北" }[gameInfo?.game_info?.seat] || "東";
+  function modernSeatKey(gameInfo) {
+    const value = gameInfo?.game_info?.seat;
+    const normalized = String(value ?? "").trim().toLowerCase();
+    const aliases = {
+      east: "east", south: "south", west: "west", north: "north",
+      e: "east", s: "south", w: "west", n: "north",
+      "1z": "east", "2z": "south", "3z": "west", "4z": "north",
+      "東": "east", "南": "south", "西": "west", "北": "north"
+    };
+    if (aliases[normalized]) return aliases[normalized];
+    if (Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 3) {
+      return ["east", "south", "west", "north"][Number(value)];
+    }
+    return null;
+  }
+
+  function modernPageSeatKey() {
+    const hero = document.querySelector('[class*="_hero_"] [class*="_wind_"]') ||
+      document.querySelector('[class*="_hero_"]');
+    const text = String(hero?.textContent || "").trim();
+    return { 東: "east", 南: "south", 西: "west", 北: "north" }[text[0]] || null;
+  }
+
+  function modernSeatLabel(gameInfo, usePageSeat = false) {
+    const seat = (usePageSeat ? modernPageSeatKey() : null) || modernSeatKey(gameInfo);
+    return { east: "東", south: "南", west: "西", north: "北" }[seat] || "";
   }
 
   function modernRoundWind(gameInfo) {
     return { east: "1z", south: "2z", west: "3z", north: "4z" }[gameInfo?.game_info?.bakaze] || "1z";
   }
 
-  function modernSeatWind(gameInfo) {
-    return { east: "1z", south: "2z", west: "3z", north: "4z" }[gameInfo?.game_info?.seat] || "1z";
+  function modernSeatWind(gameInfo, usePageSeat = false) {
+    const seat = (usePageSeat ? modernPageSeatKey() : null) || modernSeatKey(gameInfo);
+    return { east: "1z", south: "2z", west: "3z", north: "4z" }[seat] || "";
   }
 
   function classicRoundWindCode(kyoku) {
@@ -471,8 +496,10 @@
         : [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
       roundText: modernRoundLabel(gameInfo),
       honba: Number(gameInfo?.game_info?.round?.honba || 0),
-      seatText: modernSeatLabel(gameInfo),
-      actorText: modernSeatLabel(gameInfo),
+      seatText: modernSeatLabel(gameInfo, true),
+      actorText: modernSeatLabel(gameInfo, true),
+      roundWind: modernRoundWind(gameInfo),
+      seatWind: modernSeatWind(gameInfo, true),
       tilesLeftText: String(gameInfo?.game_info?.tiles_left || entry.tiles_left || ""),
       currentTurn: Number(entry.junme || 0),
       scores: (gameInfo?.game_info?.scores || []).map((score) => Number(score)),
@@ -700,8 +727,10 @@
           : [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
         roundText: current?.roundText || modernRoundLabel(gameInfo),
         honba: Number(gameInfo?.game_info?.round?.honba || 0),
-        seatText: modernSeatLabel(gameInfo),
-        actorText: modernSeatLabel(gameInfo),
+        seatText: modernSeatLabel(gameInfo, true),
+        actorText: modernSeatLabel(gameInfo, true),
+        roundWind: modernRoundWind(gameInfo),
+        seatWind: modernSeatWind(gameInfo, true),
         tilesLeftText: String(gameInfo?.game_info?.tiles_left || entry?.tiles_left || ""),
         currentTurn: Number(entry?.junme || 0),
         scores: (gameInfo?.game_info?.scores || []).map((score) => Number(score)),

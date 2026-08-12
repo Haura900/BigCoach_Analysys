@@ -145,9 +145,14 @@ test("new top-level response exposes additive yaku allocation", () => {
       win_prob: [0, 0.5],
       tenpai_prob: [0, 0.8],
       call_prob: [0, 0.25],
+      call_win_prob: [0, 0.03],
+      call_tile_stats: [
+        { tile: 31, probability: [0, 0.15] },
+        { tile: 32, probability: [0, 0.10] }
+      ],
       yaku_stats: [
-        { yaku: 1, occurrence_prob: [0, 0.125], inclusive_score: [0, 100], marginal_score: [0, 40], shapley_score: [0, 60] },
-        { yaku: 4096, occurrence_prob: [0, 0.5], inclusive_score: [0, 100], marginal_score: [0, 20], shapley_score: [0, 40] }
+        { yaku: 1, occurrence_prob: [0, 0.125], inclusive_score: [0, 100], marginal_score: [0, 40], shapley_score: [0, 60], called_occurrence_prob: [0, 0.05], called_shapley_score: [0, 12.5] },
+        { yaku: 4096, occurrence_prob: [0, 0.5], inclusive_score: [0, 100], marginal_score: [0, 20], shapley_score: [0, 40], called_occurrence_prob: [0, 0.025], called_shapley_score: [0, 7.5] }
       ]
     }]
   }, scene);
@@ -156,6 +161,11 @@ test("new top-level response exposes additive yaku allocation", () => {
   assert.equal(result.config.enable_turn_yaku, true);
   assert.equal(result.candidates[0].expectedScore, 100);
   assert.equal(result.candidates[0].callProbability, 0.25);
+  assert.equal(result.candidates[0].callWinProbability, 0.03);
+  assert.deepEqual(result.candidates[0].callTileRates.map((entry) => entry.tile), ["5z", "6z"]);
+  assert.deepEqual(result.candidates[0].callTileRates.map((entry) => entry.conditionalProbability), [0.6, 0.4]);
+  assert.deepEqual(result.candidates[0].calledYakuContributions.map((entry) => entry.occurrence), [0.2, 0.1]);
+  assert.deepEqual(result.candidates[0].calledYakuContributions.map((entry) => entry.shapley), [50, 30]);
   assert.equal(result.candidates[0].shapleyTotal, 100);
   assert.equal(result.candidates[0].shapleyResidual, 0);
   assert.equal(result.candidates[0].yakuChartContributions.length, 2);

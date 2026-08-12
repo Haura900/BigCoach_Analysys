@@ -36,6 +36,13 @@ test("remaining live-wall count is retained separately from the displayed turn",
   assert.equal(scene.currentTurn, 16);
 });
 
+test("explicit modern seat wind is not replaced by an East-looking label", () => {
+  const scene = normalizeScene({ ...raw, seatText: "東", seatWind: "3z", roundWind: "1z" },
+    "https://gokujan.com/review/3bbbd11acfa557b9");
+  assert.equal(scene.roundWind, "1z");
+  assert.equal(scene.seatWind, "3z");
+});
+
 test("モダン画面が返す河と副露のフラット配列を保持する", () => {
   const scene = normalizeScene({
     ...raw,

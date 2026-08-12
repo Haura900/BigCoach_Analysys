@@ -652,11 +652,20 @@ function candidateTable(title, analysis, mediaMode = "preview") {
       return `<span title="${escapeHtml(entry.name)}${suffix}: ${Number(entry.shapley).toFixed(1)}点" style="display:flex;align-items:center;justify-content:center;width:${width.toFixed(4)}%;min-width:1px;height:18px;overflow:hidden;background:${yakuColor(entry)};border-right:1px solid #111;color:#fff;font-size:10px;font-weight:800;line-height:1;white-space:nowrap;text-shadow:0 1px 2px #000">${escapeHtml(label)}</span>`;
     }).join("");
     const rows = entries.map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${(entry.occurrence * 100).toFixed(2)}%</td><td>${entry.shapley.toFixed(1)}</td></tr>`).join("");
+    const calledRows = (candidate.calledYakuContributions || []).map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${(entry.occurrence * 100).toFixed(2)}%</td><td>${entry.shapley.toFixed(1)}</td></tr>`).join("");
+    const calledTiles = (candidate.callTileRates || []).map((entry) =>
+      `<span style="display:inline-flex;align-items:end">${tileHtml(entry.tile, mediaMode)}<small>全体 ${(entry.probability * 100).toFixed(2)}% / 副露時 ${(entry.conditionalProbability * 100).toFixed(1)}%</small></span>`
+    ).join("");
+    const calledDetails = candidate.callProbability > 1e-12
+      ? `<h4>副露時の内訳 <small>副露発生 ${(candidate.callProbability * 100).toFixed(2)}%</small></h4>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">${calledTiles || "なし"}</div>
+        <table style="font-size:11px;margin-top:4px"><thead><tr><th>役</th><th>副露時出現率</th><th>副露時Shapley</th></tr></thead><tbody>${calledRows || '<tr><td colspan="3">該当役なし</td></tr>'}</tbody></table>`
+      : "";
     const residual = Math.abs(Number(candidate.shapleyResidual || 0));
     return `<div style="display:flex;width:220px;height:18px;overflow:hidden;border-radius:3px;background:#111">${segments}</div>
       <details style="margin-top:4px"><summary>詳細</summary><table style="font-size:11px;margin-top:4px"><thead><tr><th>役</th><th>出現率</th><th>Shapley</th></tr></thead>
       <tbody>${rows}</tbody><tfoot><tr><th>合計</th><td>期待値 ${candidate.expectedScore.toFixed(1)}</td><td>${candidate.shapleyTotal.toFixed(1)}</td></tr>
-      <tr><th>残差</th><td colspan="2">${residual.toFixed(4)}</td></tr></tfoot></table></details>`;
+      <tr><th>残差</th><td colspan="2">${residual.toFixed(4)}</td></tr></tfoot></table>${calledDetails}</details>`;
   };
   const rows = analysis.candidates.map((candidate) => `
     <tr>
@@ -664,7 +673,7 @@ function candidateTable(title, analysis, mediaMode = "preview") {
       <td>${candidate.expectedScore.toFixed(0)}</td>
       <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
       <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
-      <td>${(candidate.callProbability * 100).toFixed(2)}%</td>
+      <td>${(candidate.callWinProbability * 100).toFixed(2)}%</td>
       <td>
         <div style="display:flex;flex-wrap:wrap;gap:2px">${(candidate.ukeire || []).map((item) =>
           `<span style="display:inline-flex;align-items:end">${tileHtml(item.tile, mediaMode)}<small>×${item.count}</small></span>`).join("")}</div>
@@ -672,7 +681,7 @@ function candidateTable(title, analysis, mediaMode = "preview") {
       </td>
       <td style="white-space:normal">${contributionHtml(candidate)}</td>
     </tr>`).join("");
-  return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>副露率</th><th>受入</th><th>役別Shapley<br><small>共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>副露和了率</th><th>受入</th><th>役別Shapley<br><small>共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function normalizeCaptureRect(rect) {
