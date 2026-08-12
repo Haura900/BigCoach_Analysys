@@ -7,14 +7,14 @@ const fs = require("node:fs");
 const { codesToIndices, windToIndex, removeKnownTiles, wallCounts } = require("./tiles");
 
 const YAKU_NAMES = new Map([
-  [2 ** 0, "門前清自摸和"], [2 ** 1, "リーチ"], [2 ** 2, "一発"],
-  [2 ** 3, "タンヤオ"], [2 ** 4, "ピンフ"], [2 ** 5, "一盃口"],
+  [2 ** 0, "門前清自摸和"], [2 ** 1, "立直"], [2 ** 2, "一発"],
+  [2 ** 3, "断么九"], [2 ** 4, "平和"], [2 ** 5, "一盃口"],
   [2 ** 6, "槍槓"], [2 ** 7, "嶺上開花"], [2 ** 8, "海底摸月"],
   [2 ** 9, "河底撈魚"], [2 ** 10, "ドラ"], [2 ** 11, "裏ドラ"],
   [2 ** 12, "赤ドラ"], [2 ** 13, "白"], [2 ** 14, "發"], [2 ** 15, "中"],
   [2 ** 16, "自風 東"], [2 ** 17, "自風 南"], [2 ** 18, "自風 西"],
   [2 ** 19, "自風 北"], [2 ** 20, "場風 東"], [2 ** 21, "場風 南"],
-  [2 ** 22, "場風 西"], [2 ** 23, "場風 北"], [2 ** 24, "ダブルリーチ"],
+  [2 ** 22, "場風 西"], [2 ** 23, "場風 北"], [2 ** 24, "二重立直"],
   [2 ** 25, "七対子"], [2 ** 26, "対々和"], [2 ** 27, "三暗刻"],
   [2 ** 28, "三色同刻"], [2 ** 29, "三色同順"], [2 ** 30, "混老頭"],
   [2 ** 31, "一気通貫"], [2 ** 32, "混全帯么九"], [2 ** 33, "小三元"],
@@ -35,6 +35,24 @@ function clamp(value, min, max) {
 function yakuName(value) {
   const numeric = Number(value);
   return YAKU_NAMES.get(numeric) || `役 ${numeric}`;
+}
+
+function aggregateYakuContributions(entries, limit = 5) {
+  const ranked = (entries || [])
+    .filter((entry) => Number(entry.shapley) > 1e-9)
+    .slice()
+    .sort((a, b) => Number(b.shapley) - Number(a.shapley));
+  const visible = ranked.slice(0, limit);
+  const hidden = ranked.slice(limit);
+  if (!hidden.length) return visible;
+  return [...visible, {
+    yaku: null,
+    name: "その他",
+    inclusive: hidden.reduce((sum, entry) => sum + Number(entry.inclusive || 0), 0),
+    marginal: hidden.reduce((sum, entry) => sum + Number(entry.marginal || 0), 0),
+    shapley: hidden.reduce((sum, entry) => sum + Number(entry.shapley || 0), 0),
+    count: hidden.length
+  }];
 }
 
 const MISSING_DLL_EXIT_CODE = 0xc0000135;
@@ -120,13 +138,19 @@ class SimulatorService {
 
   buildPayload(scene, settings, withWall) {
     if (!scene.handTiles.length) throw new Error("手牌を取得できていないため実行できません。");
+    const sceneShanten = Number(scene.shanten);
+    const autoDisableDeepSearch = settings.autoDisableDeepSearch !== false;
+    const disableDeepSearchOptions = autoDisableDeepSearch && scene.shanten != null &&
+      Number.isFinite(sceneShanten) && sceneShanten >= 4;
     const payload = {
       game_mode: 1,
       enable_reddora: Boolean(settings.enableRedDora),
       enable_uradora: Boolean(settings.enableUraDora),
-      enable_shanten_down: Boolean(settings.enableShantenDown),
-      enable_tegawari: Boolean(settings.enableTegawari),
+      enable_shanten_down: Boolean(settings.enableShantenDown) && !disableDeepSearchOptions,
+      enable_tegawari: Boolean(settings.enableTegawari) && !disableDeepSearchOptions,
+      auto_disable_deep_search: autoDisableDeepSearch,
       enable_riichi: Boolean(settings.enableRiichi),
+      enable_turn_yaku: true,
       calc_stats: true,
       calc_yaku_stats: true,
       calc_shapley_stats: true,
@@ -204,6 +228,7 @@ class SimulatorService {
           winProbability: at(stat.win_prob),
           tenpaiProbability: at(stat.tenpai_prob),
           yakuContributions,
+          yakuChartContributions: aggregateYakuContributions(yakuContributions),
           shapleyTotal,
           shapleyResidual: expectedScore - shapleyTotal
         }];
@@ -212,6 +237,7 @@ class SimulatorService {
       }
     }).sort((a, b) => b.expectedScore - a.expectedScore);
     return {
+      config: response.config || {},
       shanten,
       searched: Number(response.searched || 0),
       candidates,
@@ -238,4 +264,4 @@ class SimulatorService {
   }
 }
 
-module.exports = { SimulatorService, formatExitCode };
+module.exports = { SimulatorService, aggregateYakuContributions, formatExitCode };

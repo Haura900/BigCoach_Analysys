@@ -106,11 +106,22 @@ tr.recommended { background: rgba(70,185,139,.12); }
 .tile-image { height: 38px; width: auto; vertical-align: middle; }
 .ukeire-tiles { display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-end; min-width: 130px; }
 .ukeire-tiles > span { display: inline-flex; align-items: end; }
-.yaku-contributions { min-width: 150px; text-align: left; white-space: normal; }
+.scale-label { display: block; color: var(--muted); font-weight: normal; white-space: nowrap; }
+.yaku-chart-track { display: flex; width: 100%; min-width: 190px; height: 16px; overflow: hidden; border-radius: 3px; background: #0d1219; }
+.yaku-chart-segment { display: block; min-width: 1px; height: 100%; border-right: 1px solid #0d1219; }
+.yaku-chart-segment:nth-child(1) { background: #46b98b; }
+.yaku-chart-segment:nth-child(2) { background: #4c9be8; }
+.yaku-chart-segment:nth-child(3) { background: #9473e6; }
+.yaku-chart-segment:nth-child(4) { background: #e39154; }
+.yaku-chart-segment:nth-child(5) { background: #dc6d91; }
+.yaku-chart-segment:nth-child(6) { background: #687386; }
+.yaku-contributions { min-width: 240px; margin-top: 5px; text-align: left; white-space: normal; }
 .yaku-contributions summary { cursor: pointer; color: var(--accent); white-space: nowrap; }
-.yaku-contributions > div { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
-.yaku-contributions > div strong { font-family: Consolas, monospace; }
-.yaku-contributions small { display: block; margin-top: 3px; color: var(--muted); }
+.yaku-detail-table { width: 100%; margin-top: 5px; font-size: 11px; }
+.yaku-detail-table th, .yaku-detail-table td { padding: 3px 5px; white-space: nowrap; }
+.yaku-detail-table th:first-child, .yaku-detail-table td:first-child { text-align: left; }
+.yaku-detail-table td { font-family: Consolas, monospace; }
+.yaku-detail-table tfoot { border-top: 1px solid var(--border); }
 label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0; }
 input, select, textarea { width: 100%; margin-top: 4px; border: 1px solid var(--border); border-radius: 7px; padding: 8px; background: #0d1219; color: var(--text); }
 textarea { resize: vertical; }
@@ -123,6 +134,7 @@ dialog.wide { width: min(1200px, 94vw); height: min(900px, 92vh); max-height: 92
 .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px; }
 fieldset label { display: flex; align-items: center; gap: 5px; margin: 2px; }
+fieldset label.simulator-auto-option { flex-basis: 100%; }
 fieldset label.simulator-rate { flex-basis: 100%; justify-content: space-between; }
 fieldset label.simulator-rate input { width: 90px; margin-top: 0; }
 fieldset input { width: auto; margin: 0; }

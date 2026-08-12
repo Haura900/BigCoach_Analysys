@@ -186,7 +186,13 @@
         "enable_tegawari": {
           "type": "boolean"
         },
+        "auto_disable_deep_search": {
+          "type": "boolean"
+        },
         "enable_riichi": {
+          "type": "boolean"
+        },
+        "enable_turn_yaku": {
           "type": "boolean"
         },
         "extra": {

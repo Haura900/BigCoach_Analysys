@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { SimulatorService } = require("../src/lib/simulator");
+const { SimulatorService, aggregateYakuContributions } = require("../src/lib/simulator");
 
 function service() {
   return new SimulatorService({ resourcesPath: "C:\\unused", log: () => {} });
@@ -36,12 +36,70 @@ test("new simulator payload enables exact Shapley and maps tsumo share to ron ra
   assert.equal(payload.calc_shapley_stats, true);
   assert.ok(Math.abs(payload.ron_rate - 0.7) < 1e-12);
   assert.equal(payload.enable_riichi, true);
+  assert.equal(payload.enable_turn_yaku, true);
+  assert.equal(payload.auto_disable_deep_search, true);
   assert.equal("hand_tiles" in payload, false);
+});
+
+test("all simulator settings map to their engine request fields", () => {
+  const payload = service().buildPayload({ ...scene, shanten: 3 }, {
+    enableRedDora: false,
+    enableUraDora: true,
+    enableShantenDown: true,
+    enableTegawari: false,
+    autoDisableDeepSearch: false,
+    enableRiichi: true,
+    tsumoWinSharePercent: 37
+  }, false);
+
+  assert.equal(payload.enable_reddora, false);
+  assert.equal(payload.enable_uradora, true);
+  assert.equal(payload.enable_shanten_down, true);
+  assert.equal(payload.enable_tegawari, false);
+  assert.equal(payload.auto_disable_deep_search, false);
+  assert.equal(payload.enable_riichi, true);
+  assert.ok(Math.abs(payload.ron_rate - 0.63) < 1e-12);
+});
+
+test("four shanten and deeper force shanten-down and tegawari off", () => {
+  const settings = {
+    enableShantenDown: true,
+    enableTegawari: true
+  };
+  const fourShanten = service().buildPayload({ ...scene, shanten: 4 }, settings, false);
+  const threeShanten = service().buildPayload({ ...scene, shanten: 3 }, settings, false);
+
+  assert.equal(fourShanten.enable_shanten_down, false);
+  assert.equal(fourShanten.enable_tegawari, false);
+  assert.equal(threeShanten.enable_shanten_down, true);
+  assert.equal(threeShanten.enable_tegawari, true);
+});
+
+test("deep-search auto-disable can be opted out", () => {
+  const payload = service().buildPayload({ ...scene, shanten: 4 }, {
+    enableShantenDown: true,
+    enableTegawari: true,
+    autoDisableDeepSearch: false
+  }, false);
+
+  assert.equal(payload.auto_disable_deep_search, false);
+  assert.equal(payload.enable_shanten_down, true);
+  assert.equal(payload.enable_tegawari, true);
 });
 
 test("new top-level response exposes additive yaku allocation", () => {
   const result = service().parse({
     success: true,
+    config: {
+      enable_reddora: true,
+      enable_uradora: false,
+      enable_shanten_down: true,
+      enable_tegawari: false,
+      auto_disable_deep_search: true,
+      enable_riichi: true,
+      enable_turn_yaku: true,
+      ron_rate: 0.7
+    },
     shanten: { all: 1 },
     searched: 42,
     stats: [{
@@ -59,9 +117,33 @@ test("new top-level response exposes additive yaku allocation", () => {
   }, scene);
 
   assert.equal(result.recommendation, "1s");
+  assert.equal(result.config.enable_turn_yaku, true);
   assert.equal(result.candidates[0].expectedScore, 100);
   assert.equal(result.candidates[0].shapleyTotal, 100);
   assert.equal(result.candidates[0].shapleyResidual, 0);
+  assert.equal(result.candidates[0].yakuChartContributions.length, 2);
   assert.deepEqual(result.candidates[0].yakuContributions.map((entry) => entry.name),
     ["門前清自摸和", "赤ドラ"]);
+});
+
+test("chart keeps the top five roles and combines the rest", () => {
+  const entries = [7, 6, 5, 4, 3, 2, 1].map((shapley, index) => ({
+    yaku: index + 1,
+    name: `役${index + 1}`,
+    inclusive: shapley * 2,
+    marginal: shapley / 2,
+    shapley
+  }));
+
+  const chart = aggregateYakuContributions(entries);
+  assert.equal(chart.length, 6);
+  assert.deepEqual(chart.slice(0, 5).map((entry) => entry.shapley), [7, 6, 5, 4, 3]);
+  assert.deepEqual(chart[5], {
+    yaku: null,
+    name: "その他",
+    inclusive: 6,
+    marginal: 1.5,
+    shapley: 3,
+    count: 2
+  });
 });

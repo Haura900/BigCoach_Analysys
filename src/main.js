@@ -39,6 +39,7 @@ const DEFAULT_SETTINGS = {
   enableUraDora: false,
   enableShantenDown: true,
   enableTegawari: true,
+  autoDisableDeepSearch: true,
   enableRiichi: false,
   tsumoWinSharePercent: 100,
   simulatorTimeoutSec: 30,
@@ -611,9 +612,25 @@ tileHtml = safeTileHtml;
 
 function candidateTable(title, analysis, mediaMode = "preview") {
   if (!analysis?.candidates?.length) return `<h3>${escapeHtml(title)}</h3><p>結果なし</p>`;
-  const contributionHtml = (candidate) => (candidate.yakuContributions || [])
-    .map((entry) => `${escapeHtml(entry.name)} ${Number(entry.shapley).toFixed(1)}`)
-    .join(" / ") || "なし";
+  const commonScale = Math.max(1, ...analysis.candidates.map((candidate) =>
+    Math.max(0, Number(candidate.shapleyTotal || 0))));
+  const colors = ["#46b98b", "#4c9be8", "#9473e6", "#e39154", "#dc6d91", "#687386"];
+  const contributionHtml = (candidate) => {
+    const entries = candidate.yakuContributions || [];
+    if (!entries.length) return "なし";
+    const chartEntries = candidate.yakuChartContributions || entries.slice(0, 5);
+    const segments = chartEntries.map((entry, index) => {
+      const width = Math.max(0, Number(entry.shapley || 0)) / commonScale * 100;
+      const suffix = entry.count ? `（${entry.count}役）` : "";
+      return `<span title="${escapeHtml(entry.name)}${suffix}: ${Number(entry.shapley).toFixed(1)}点" style="display:block;width:${width.toFixed(4)}%;min-width:1px;height:14px;background:${colors[index]};border-right:1px solid #111"></span>`;
+    }).join("");
+    const rows = entries.map((entry) => `<tr><td>${escapeHtml(entry.name)}</td><td>${entry.inclusive.toFixed(1)}</td><td>${entry.marginal.toFixed(1)}</td><td>${entry.shapley.toFixed(1)}</td></tr>`).join("");
+    const residual = Math.abs(Number(candidate.shapleyResidual || 0));
+    return `<div style="display:flex;width:220px;height:14px;overflow:hidden;border-radius:3px;background:#111">${segments}</div>
+      <details style="margin-top:4px"><summary>詳細</summary><table style="font-size:11px;margin-top:4px"><thead><tr><th>役</th><th>包含</th><th>限界</th><th>Shapley</th></tr></thead>
+      <tbody>${rows}</tbody><tfoot><tr><th>合計</th><td colspan="2">期待値 ${candidate.expectedScore.toFixed(1)}</td><td>${candidate.shapleyTotal.toFixed(1)}</td></tr>
+      <tr><th>残差</th><td colspan="3">${residual.toFixed(4)}</td></tr></tfoot></table></details>`;
+  };
   const rows = analysis.candidates.map((candidate) => `
     <tr>
       <td>${tileHtml(candidate.tile, mediaMode)}</td>
@@ -627,7 +644,7 @@ function candidateTable(title, analysis, mediaMode = "preview") {
       </td>
       <td style="white-space:normal">${contributionHtml(candidate)}</td>
     </tr>`).join("");
-  return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th><th>役別Shapley</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<h3>${escapeHtml(title)}</h3><table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th><th>役別Shapley<br><small>共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function normalizeCaptureRect(rect) {

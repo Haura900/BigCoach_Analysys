@@ -137,16 +137,29 @@ function renderHandScore(result) {
 
 function analysisTable(analysis) {
   if (!analysis?.candidates?.length) return "<div class='empty'>候補なし</div>";
+  const commonScale = Math.max(1, ...analysis.candidates.map((candidate) =>
+    Math.max(0, Number(candidate.shapleyTotal || 0))));
   const contributionHtml = (candidate) => {
     const entries = candidate.yakuContributions || [];
     if (!entries.length) return "<span class='muted'>なし</span>";
+    const chartEntries = candidate.yakuChartContributions || entries.slice(0, 5);
+    const segments = chartEntries.map((entry) => {
+      const width = Math.max(0, Number(entry.shapley || 0)) / commonScale * 100;
+      const suffix = entry.count ? `（${entry.count}役）` : "";
+      return `<span class="yaku-chart-segment" style="width:${width.toFixed(4)}%" title="${escapeHtml(entry.name)}${suffix}: ${Number(entry.shapley).toFixed(1)}点"></span>`;
+    }).join("");
     const rows = entries.map((entry) =>
-      `<div><span>${escapeHtml(entry.name)}</span><strong>${entry.shapley.toFixed(1)}</strong></div>`
+      `<tr><td>${escapeHtml(entry.name)}</td><td>${entry.inclusive.toFixed(1)}</td><td>${entry.marginal.toFixed(1)}</td><td>${entry.shapley.toFixed(1)}</td></tr>`
     ).join("");
     const residual = Math.abs(Number(candidate.shapleyResidual || 0));
-    return `<details class="yaku-contributions"><summary>${escapeHtml(entries[0].name)} ${entries[0].shapley.toFixed(0)}</summary>${rows}<small>合計 ${candidate.shapleyTotal.toFixed(1)} / 差 ${residual.toFixed(4)}</small></details>`;
+    return `<div class="yaku-chart-track" aria-label="役別Shapley寄与。共通上限${commonScale.toFixed(1)}点">${segments}</div>
+      <details class="yaku-contributions"><summary>詳細</summary>
+        <table class="yaku-detail-table"><thead><tr><th>役</th><th>包含</th><th>限界</th><th>Shapley</th></tr></thead>
+          <tbody>${rows}</tbody><tfoot><tr><th>合計</th><td colspan="2">期待値 ${candidate.expectedScore.toFixed(1)}</td><td>${candidate.shapleyTotal.toFixed(1)}</td></tr>
+          <tr><th>残差</th><td colspan="3">${residual.toFixed(4)}</td></tr></tfoot></table>
+      </details>`;
   };
-  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th><th>役別Shapley</th></tr></thead><tbody>${
+  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>受入</th><th>役別Shapley<small class="scale-label">共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${
     analysis.candidates.map((candidate, index) => `<tr class="${index === 0 ? "recommended" : ""}">
       <td>${tile(candidate.tile)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
       <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
@@ -306,7 +319,7 @@ $("#settings-save").addEventListener("click", async (event) => {
   const form = $("#settings-form");
   if (!form.reportValidity()) return;
   const data = Object.fromEntries(new FormData(form));
-  for (const name of ["enableRedDora", "enableUraDora", "enableShantenDown", "enableTegawari", "enableRiichi"]) {
+  for (const name of ["enableRedDora", "enableUraDora", "enableShantenDown", "enableTegawari", "autoDisableDeepSearch", "enableRiichi"]) {
     data[name] = form.elements.namedItem(name).checked;
   }
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
