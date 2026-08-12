@@ -5,6 +5,10 @@ const net = require("node:net");
 const path = require("node:path");
 const fs = require("node:fs");
 const { codesToIndices, windToIndex, removeKnownTiles, wallCounts } = require("./tiles");
+const ENGINE_LOCK = require("../../engine-lock.json");
+
+const ENGINE_VERSION = ENGINE_LOCK.version;
+const ENGINE_API_VERSION = ENGINE_LOCK.apiVersion;
 
 const YAKU_NAMES = new Map([
   [2 ** 0, "門前清自摸和"], [2 ** 1, "立直"], [2 ** 2, "一発"],
@@ -188,7 +192,7 @@ class SimulatorService {
       hand: codesToIndices(scene.handTiles),
       melds: scene.selfMelds || [],
       seat_wind: windToIndex(scene.seatWind),
-      version: "0.9.8"
+      version: ENGINE_VERSION
     };
     if (Number.isInteger(scene.remainingTiles)) {
       payload.remaining_tiles = clamp(scene.remainingTiles, 0, 70);
@@ -219,6 +223,9 @@ class SimulatorService {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (!data.success) throw new Error(data.err_msg || "シミュレーターが失敗を返しました");
+      if (data.engine_version !== ENGINE_VERSION || data.api_version !== ENGINE_API_VERSION) {
+        throw new Error(`Simulator engine mismatch: expected ${ENGINE_VERSION}/API ${ENGINE_API_VERSION}, got ${data.engine_version || "unknown"}/API ${data.api_version ?? "unknown"}`);
+      }
       return data;
     } finally {
       clearTimeout(timer);

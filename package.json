@@ -1,6 +1,6 @@
 {
   "name": "bigcoach-anki-studio",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "description": "BigCoach解析結果から何切るシミュレーションとAnkiカード登録を行うWindowsアプリ",
   "author": "BigCoach Anki Studio",
   "main": "src/main.js",
@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test",
+    "engine:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-engine.ps1",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis"
   },
@@ -21,6 +22,7 @@
     "asar": true,
     "files": [
       "src/**/*",
+      "engine-lock.json",
       "package.json",
       "README.md"
     ],

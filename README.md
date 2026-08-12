@@ -1,5 +1,12 @@
 # BigCoach Anki Studio
 
+## Simulator engine
+
+The bundled simulator is pinned by `engine-lock.json` to a tagged release of
+`Haura900/mahjong-cpp`. Run `npm run engine:update` to download and verify that
+exact Windows artifact. Engine updates are intentional: update the lock file,
+run the tests and smoke test, then build the installer.
+
 BigCoachの解析結果をアプリ内で表示し、現在局面の取得、何切るシミュレーション、比較表示、Ankiカード登録を一つのWindowsアプリで行います。
 
 ## 利用者向け
