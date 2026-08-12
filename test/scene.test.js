@@ -24,8 +24,16 @@ test("局面を正規化して安定IDを作る", () => {
   const scene = validateScene(normalizeScene(raw, "https://gokujan.com/review/test"));
   assert.equal(scene.handMpsz, "123m456p789s11223z");
   assert.equal(scene.currentTurn, 3);
+  assert.equal(scene.remainingTiles, 60);
   assert.equal(scene.missing.length, 0);
   assert.equal(scene.sceneId.length, 20);
+});
+
+test("remaining live-wall count is retained separately from the displayed turn", () => {
+  const scene = normalizeScene({ ...raw, tilesLeftText: "remaining 22", turn: 16 },
+    "https://gokujan.com/review/test");
+  assert.equal(scene.remainingTiles, 22);
+  assert.equal(scene.currentTurn, 16);
 });
 
 test("モダン画面が返す河と副露のフラット配列を保持する", () => {

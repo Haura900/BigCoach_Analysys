@@ -28,6 +28,24 @@ const YAKU_NAMES = new Map([
   [2 ** 55, "国士無双十三面"], [2 ** 56, "抜きドラ"]
 ]);
 
+// Keep chart labels deliberately compact: the full name remains available in
+// the tooltip and detail table, while even a narrow segment can show its role.
+const YAKU_SHORT_NAMES = new Map([
+  [2 ** 0, "\u81ea\u6478"], [2 ** 1, "\u7acb"], [2 ** 2, "\u4e00"],
+  [2 ** 3, "\u65ad"], [2 ** 4, "\u5e73"], [2 ** 5, "\u4e00\u76c3"],
+  [2 ** 6, "\u69cd"], [2 ** 7, "\u5dba"], [2 ** 8, "\u6d77"],
+  [2 ** 9, "\u6cb3"], [2 ** 10, "\u30c9"], [2 ** 11, "\u88cf"],
+  [2 ** 12, "\u8d64"], [2 ** 13, "\u767d"], [2 ** 14, "\u767c"],
+  [2 ** 15, "\u4e2d"], [2 ** 16, "\u81ea\u6771"], [2 ** 17, "\u81ea\u5357"],
+  [2 ** 18, "\u81ea\u897f"], [2 ** 19, "\u81ea\u5317"], [2 ** 20, "\u5834\u6771"],
+  [2 ** 21, "\u5834\u5357"], [2 ** 22, "\u5834\u897f"], [2 ** 23, "\u5834\u5317"],
+  [2 ** 24, "W\u7acb"], [2 ** 25, "\u4e03\u5bfe"], [2 ** 26, "\u5bfe\u3005"],
+  [2 ** 27, "\u4e09\u6697"], [2 ** 28, "\u4e09\u523b"], [2 ** 29, "\u4e09\u8272"],
+  [2 ** 30, "\u6df7\u8001"], [2 ** 31, "\u4e00\u901a"], [2 ** 32, "\u6df7\u5168"],
+  [2 ** 33, "\u5c0f\u4e09"], [2 ** 34, "\u4e09\u69d3"], [2 ** 35, "\u6df7\u4e00"],
+  [2 ** 36, "\u7d14\u5168"], [2 ** 37, "\u4e8c\u76c3"], [2 ** 38, "\u6e05\u4e00"]
+]);
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, Number(value)));
 }
@@ -35,6 +53,11 @@ function clamp(value, min, max) {
 function yakuName(value) {
   const numeric = Number(value);
   return YAKU_NAMES.get(numeric) || `役 ${numeric}`;
+}
+
+function yakuShortName(value, name) {
+  return YAKU_SHORT_NAMES.get(Number(value)) ||
+    Array.from(String(name || "\u5f79")).slice(0, 2).join("");
 }
 
 function aggregateYakuContributions(entries, limit = 5) {
@@ -48,6 +71,7 @@ function aggregateYakuContributions(entries, limit = 5) {
   return [...visible, {
     yaku: null,
     name: "その他",
+    shortName: "\u4ed6",
     inclusive: hidden.reduce((sum, entry) => sum + Number(entry.inclusive || 0), 0),
     marginal: hidden.reduce((sum, entry) => sum + Number(entry.marginal || 0), 0),
     shapley: hidden.reduce((sum, entry) => sum + Number(entry.shapley || 0), 0),
@@ -150,6 +174,13 @@ class SimulatorService {
       enable_tegawari: Boolean(settings.enableTegawari) && !disableDeepSearchOptions,
       auto_disable_deep_search: autoDisableDeepSearch,
       enable_riichi: Boolean(settings.enableRiichi),
+      enable_calls: Boolean(settings.enableCalls),
+      enable_probability_pruning: Boolean(settings.enableProbabilityPruning),
+      probability_prune_threshold:
+        clamp(Number(settings.probabilityPruneThresholdPercent ?? 0.000001), 0.000001, 100) / 100,
+      enable_other_win_stop: Boolean(settings.enableOtherWinStop),
+      other_win_hazard: Array.from({ length: 18 }, (_, index) =>
+        clamp(Number(settings.otherWinHazardPercent?.[index] ?? 0), 0, 100) / 100),
       enable_turn_yaku: true,
       calc_stats: true,
       calc_yaku_stats: true,
@@ -162,6 +193,10 @@ class SimulatorService {
       seat_wind: windToIndex(scene.seatWind),
       version: "0.9.8"
     };
+    if (Number.isInteger(scene.remainingTiles)) {
+      payload.remaining_tiles = clamp(scene.remainingTiles, 0, 70);
+    }
+    payload.other_win_hazard[17] = payload.other_win_hazard[16];
     if (withWall) {
       const known = [
         ...scene.handTiles,
@@ -196,7 +231,9 @@ class SimulatorService {
   parse(data, scene) {
     const response = data.response || data || {};
     const shanten = response.shanten || {};
-    const turn = clamp(scene.currentTurn || 1, 1, 18);
+    const turn = Number.isInteger(scene.remainingTiles)
+      ? clamp(18 - Math.floor(scene.remainingTiles / 4), 1, 18)
+      : clamp(scene.currentTurn || 1, 1, 18);
     const candidates = (response.stats || []).flatMap((stat) => {
       try {
         const tile = require("./tiles").normalizeTileCode(stat.tile);
@@ -208,13 +245,18 @@ class SimulatorService {
           }
         });
         const at = (values) => Number(values?.[turn] ?? 0);
-        const yakuContributions = (stat.yaku_stats || []).map((entry) => ({
-          yaku: Number(entry.yaku),
-          name: yakuName(entry.yaku),
-          inclusive: at(entry.inclusive_score),
-          marginal: at(entry.marginal_score),
-          shapley: at(entry.shapley_score)
-        })).filter((entry) => Math.abs(entry.inclusive) > 1e-9 ||
+        const yakuContributions = (stat.yaku_stats || []).map((entry) => {
+          const name = yakuName(entry.yaku);
+          return {
+            yaku: Number(entry.yaku),
+            name,
+            shortName: yakuShortName(entry.yaku, name),
+            occurrence: at(entry.occurrence_prob),
+            inclusive: at(entry.inclusive_score),
+            marginal: at(entry.marginal_score),
+            shapley: at(entry.shapley_score)
+          };
+        }).filter((entry) => entry.occurrence > 1e-12 || Math.abs(entry.inclusive) > 1e-9 ||
           Math.abs(entry.marginal) > 1e-9 || Math.abs(entry.shapley) > 1e-9)
           .sort((a, b) => b.shapley - a.shapley);
         const expectedScore = at(stat.exp_score);
@@ -227,6 +269,7 @@ class SimulatorService {
           expectedScore,
           winProbability: at(stat.win_prob),
           tenpaiProbability: at(stat.tenpai_prob),
+          callProbability: at(stat.call_prob),
           yakuContributions,
           yakuChartContributions: aggregateYakuContributions(yakuContributions),
           shapleyTotal,

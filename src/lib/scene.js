@@ -12,12 +12,19 @@ function parseWind(text, fallback = "1z") {
   return fallback;
 }
 
+function parseRemainingTiles(tilesLeftText) {
+  const match = String(tilesLeftText || "").match(/\d+/);
+  if (!match) return null;
+  const remaining = Number(match[0]);
+  return Number.isFinite(remaining) ? Math.max(0, Math.min(70, Math.round(remaining))) : null;
+}
+
 function parseTurn(tilesLeftText, explicitTurn) {
   const explicit = Number(explicitTurn);
   if (Number.isFinite(explicit) && explicit > 0) return Math.min(18, Math.round(explicit));
-  const match = String(tilesLeftText || "").match(/\d+/);
-  if (!match) return 1;
-  return Math.max(1, Math.min(18, 18 - Math.floor(Number(match[0]) / 4)));
+  const remaining = parseRemainingTiles(tilesLeftText);
+  if (remaining != null) return Math.max(1, Math.min(18, 18 - Math.floor(remaining / 4)));
+  return 1;
 }
 
 function subtractTiles(base, subtract) {
@@ -48,13 +55,15 @@ function normalizeScene(raw, url) {
   const candidates = normalizeCandidates(raw.candidates || []);
   const actualDiscard = raw.actualDiscard || null;
   const recommendedDiscard = raw.recommendedDiscard || candidates[0]?.tile || null;
-  const currentTurn = parseTurn(raw.tilesLeftText, raw.turn);
+  const remainingTiles = parseRemainingTiles(raw.tilesLeftText);
+  const currentTurn = parseTurn(raw.tilesLeftText, raw.turn ?? raw.currentTurn);
   const handsBySeat = Array.isArray(raw.handsBySeat) ? raw.handsBySeat : [];
   const identitySeed = JSON.stringify({
     url,
     roundText,
     seatText,
     currentTurn,
+    remainingTiles,
     handTiles,
     handsBySeat,
     selfCallTiles,
@@ -87,6 +96,7 @@ function normalizeScene(raw, url) {
     seatWind: parseWind(seatText, "1z"),
     tilesLeftText: raw.tilesLeftText || "",
     currentTurn,
+    remainingTiles,
     scores: raw.scores || [],
     actualDiscard,
     recommendedDiscard,
@@ -156,4 +166,4 @@ function shinMistake(scene, settings) {
   };
 }
 
-module.exports = { parseWind, parseTurn, normalizeScene, validateScene, shinMistake };
+module.exports = { parseWind, parseRemainingTiles, parseTurn, normalizeScene, validateScene, shinMistake };

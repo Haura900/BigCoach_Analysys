@@ -92,6 +92,18 @@
         <label><input name="enableShantenDown" type="checkbox"> シャンテン戻し</label>
         <label><input name="enableTegawari" type="checkbox"> 手変わり</label>
         <label><input name="enableRiichi" type="checkbox"> リーチ</label>
+        <label><input name="enableCalls" type="checkbox"> 副露（役牌ポンのみ）を含める</label>
+        <label class="simulator-auto-option"><input name="enableProbabilityPruning" type="checkbox"> 低確率の枝を省略して高速化</label>
+        <label class="simulator-rate">枝刈り閾値（%、高いほど高速・誤差大）<input name="probabilityPruneThresholdPercent" type="number" min="0.000001" max="100" step="0.000001"></label>
+        <label class="simulator-auto-option"><input name="enableOtherWinStop" type="checkbox"> 他家の和了でシミュレーションを打ち切る</label>
+        <div class="other-win-hazard-settings">
+          <div class="other-win-hazard-title">他家和了ハザード（各巡の条件付き確率 %）</div>
+          <table class="other-win-hazard-table">
+            <thead><tr><th>巡目</th><th>%</th><th>巡目</th><th>%</th><th>巡目</th><th>%</th></tr></thead>
+            <tbody id="other-win-hazard-grid"></tbody>
+          </table>
+          <small>18巡目は17巡目と同じ値を使用します。</small>
+        </div>
         <label class="simulator-auto-option"><input name="autoDisableDeepSearch" type="checkbox"> 4シャンテン以上でシャンテン戻し・手変わりを自動OFF</label>
         <label class="simulator-rate">和了のうちツモの割合（%）<input name="tsumoWinSharePercent" type="number" min="0" max="100" step="1"></label>
       </fieldset>

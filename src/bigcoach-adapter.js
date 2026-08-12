@@ -98,6 +98,33 @@
     return melds;
   }
 
+  const MODERN_MELD_TYPES = { pon: 0, chi: 1, ankan: 2, daiminkan: 3, kakan: 4 };
+
+  function modernMeldTileCodes(meld) {
+    const type = String(meld?.type || "").toLowerCase();
+    const expectedSize = ["ankan", "daiminkan", "kakan"].includes(type) ? 4 : 3;
+    const raw = Array.isArray(meld?.tiles)
+      ? meld.tiles
+      : [meld?.pai, ...(meld?.consumed || [])];
+    const tiles = raw.map(normalizeTile).filter(Boolean);
+    if (type === "ankan" && tiles.length > 0 && tiles.length < expectedSize) {
+      const concealedTile = normalizeForMeld(tiles[0]);
+      while (tiles.length < expectedSize) tiles.push(concealedTile);
+    }
+    return tiles.slice(0, expectedSize);
+  }
+
+  function buildModernMelds(fuuros) {
+    return [...(fuuros || [])].flatMap((meld) => {
+      const typeName = String(meld?.type || "").toLowerCase();
+      const type = MODERN_MELD_TYPES[typeName];
+      const tiles = modernMeldTileCodes(meld);
+      if (type == null || tiles.length < 3 ||
+          ([2, 3, 4].includes(type) && tiles.length !== 4)) return [];
+      return [{ type, tiles: tiles.map(tileIndex).filter((tile) => tile != null) }];
+    });
+  }
+
   function tileFromImage(image) {
     const source = String(image.currentSrc || image.src || "");
     const match = source.match(TILE_PATTERN) || source.match(MODERN_TILE_PATTERN);
@@ -423,7 +450,8 @@
       ? currentOpponentCalls
       : (gameInfo?.game_info?.other_hands || []).map((hand) =>
         [...(hand.open_sets || [])].flatMap(modernOpenSetTiles));
-    const selfCallTiles = [...(entry.state?.fuuros || [])].flatMap((meld) => [meld.pai, ...(meld.consumed || [])].map(normalizeTile).filter(Boolean));
+    const selfFuuros = [...(entry.state?.fuuros || [])];
+    const selfCallTiles = selfFuuros.flatMap(modernMeldTileCodes);
     const opponentCallTiles = otherHandSets.flat();
     const currentRiverTiles = modernCurrentRiverTiles();
     const currentDoraTiles = modernCurrentDoraTiles();
@@ -437,7 +465,7 @@
       callTiles: [selfCallTiles, ...otherHandSets].flat(),
       opponentCallTiles,
       selfCallTiles,
-      selfMelds: buildMelds(selfCallTiles),
+      selfMelds: buildModernMelds(selfFuuros),
       doraTiles: currentDoraTiles.length
         ? currentDoraTiles
         : [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),
@@ -610,8 +638,7 @@
   }
 
   function meldTiles(entry) {
-    return (entry?.state?.fuuros || []).flatMap((meld) =>
-      [meld.pai, ...(meld.consumed || [])].map(normalizeTile).filter(Boolean));
+    return (entry?.state?.fuuros || []).flatMap(modernMeldTileCodes);
   }
 
   function candidateRows(entry) {
@@ -641,7 +668,8 @@
       const gameInfo = current?.gameInfo || parseGameInfo(entry);
       const currentHand = modernCurrentHandTiles().filter(Boolean);
       const otherHands = modernCurrentOtherHands();
-      const selfCallTiles = [...(entry?.state?.fuuros || [])].flatMap((meld) => [meld.pai, ...(meld.consumed || [])].map(normalizeTile).filter(Boolean));
+      const selfFuuros = [...(entry?.state?.fuuros || [])];
+      const selfCallTiles = selfFuuros.flatMap(modernMeldTileCodes);
       const currentOpponentCalls = modernCurrentOpponentCallTiles();
       const fallbackOpponentCalls = (gameInfo?.game_info?.other_hands || []).map((hand) =>
         [...(hand.open_sets || [])].flatMap(modernOpenSetTiles));
@@ -666,7 +694,7 @@
         callTiles: callTilesBySeat.flat(),
         opponentCallTiles: callTilesBySeat.slice(1).flat(),
         selfCallTiles,
-        selfMelds: buildMelds(selfCallTiles),
+        selfMelds: buildModernMelds(selfFuuros),
         doraTiles: currentDoraTiles.length
           ? currentDoraTiles
           : [...(gameInfo?.game_info?.dora_indicators || [])].map(normalizeTile).filter(Boolean),

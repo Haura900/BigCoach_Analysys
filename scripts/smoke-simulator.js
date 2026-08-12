@@ -80,7 +80,8 @@ async function main() {
     const turnPayload = service.buildPayload({
       ...scene,
       handTiles: ["1m", "2m", "3m", "9m", "1p", "2p", "3p", "7p", "7p", "1s", "2s", "3s", "4s", "5s"],
-      doraTiles: ["1z"]
+      doraTiles: ["1z"],
+      remainingTiles: 4
     }, {
       enableRedDora: true,
       enableUraDora: false,
@@ -93,10 +94,13 @@ async function main() {
     const turnResult = await service.request(turnPayload, 30000);
     const turnStat = turnResult.stats.find((stat) => stat.tile === 8);
     const turnYaku = new Map((turnStat?.yaku_stats || []).map((entry) => [Number(entry.yaku), entry]));
-    for (const yaku of [2 ** 2, 2 ** 8, 2 ** 9]) {
+    for (const yaku of [2 ** 2, 2 ** 8]) {
       if (!turnYaku.has(yaku) || Number(turnYaku.get(yaku).inclusive_score?.[1] || 0) <= 0) {
         throw new Error(`巡目役 ${yaku} が期待値へ反映されていません`);
       }
+    }
+    if (turnYaku.has(2 ** 9)) {
+      throw new Error("海底摸月と河底撈魚が同時に有効です");
     }
     console.log(JSON.stringify({
       withWall: result.withWall.recommendation,
@@ -107,7 +111,7 @@ async function main() {
       settingsConnected: true,
       deepOptionsDisabled: true,
       deepOptionsOptOut: true,
-      turnYaku: ["一発", "海底摸月", "河底撈魚"]
+      turnYaku: ["一発", "海底摸月"]
     }));
   } finally {
     if (owned) service.stop();
