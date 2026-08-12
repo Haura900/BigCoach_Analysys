@@ -64,6 +64,7 @@ let currentSimulation;
 let currentMajorMistakes = [];
 let currentDecisions = [];
 let currentCardImages;
+let currentCardCapture;
 let currentCardPreview;
 let currentRiskReadingPreview;
 let tileImageCache;
@@ -302,6 +303,7 @@ function attachBigCoachViewEvents(view) {
         currentScene = null;
         currentSimulation = null;
         currentCardImages = null;
+        currentCardCapture = null;
         currentCardPreview = null;
         currentRiskReadingPreview = null;
         loadedReviewUrl = url;
@@ -445,6 +447,7 @@ async function captureScene() {
   };
   currentSimulation = null;
   currentCardImages = null;
+  currentCardCapture = null;
   currentCardPreview = null;
   currentRiskReadingPreview = null;
   return currentScene;
@@ -556,19 +559,22 @@ function comparisonStatus(scene, simulation) {
   };
 }
 
-async function ensureSimulation(scene) {
-  if (currentSimulation) {
-    return currentSimulation;
-  }
+async function analyzeScene(scene) {
   if (scene.judgmentType === "call") {
-    currentSimulation = {
+    return {
       withWall: { candidates: [], recommendation: null },
       withoutWall: { candidates: [], recommendation: null },
       skippedReason: "Skipped because call scenes are not simulator targets."
     };
+  }
+  return simulator.analyze(scene, settings);
+}
+
+async function ensureSimulation(scene) {
+  if (currentSimulation) {
     return currentSimulation;
   }
-  currentSimulation = await simulator.analyze(scene, settings);
+  currentSimulation = await analyzeScene(scene);
   return currentSimulation;
 }
 
@@ -1387,16 +1393,38 @@ function registerIpc() {
   ipcMain.handle("stats:refresh", () => refreshStats());
   ipcMain.handle("anki:preview-risk-reading", (_event, payload) => previewRiskReadingCard(payload));
   ipcMain.handle("anki:register-risk-reading", (_event, payload) => registerRiskReadingCard(payload));
-  ipcMain.handle("anki:preview", async (_event, payload) => {
+  ipcMain.handle("anki:capture-preview", async (_event, payload) => {
     const memo = typeof payload === "object" && payload ? payload.memo : payload;
     const frontNote = typeof payload === "object" && payload ? payload.frontNote : "";
     const scene = await captureScene();
-    await ensureSimulation(scene);
     currentCardImages = null;
     const images = await prepareCardImages();
+    const captureId = `${scene.sceneId}-${Date.now()}`;
+    currentCardCapture = {
+      captureId,
+      scene,
+      images,
+      memo: memo || "",
+      frontNote
+    };
+    return {
+      captureId,
+      scene,
+      captureDiagnostics: images.captureDiagnostics
+    };
+  });
+  ipcMain.handle("anki:finish-preview", async (_event, payload) => {
+    payload = payload || {};
+    const capture = currentCardCapture;
+    if (!capture || capture.captureId !== payload.captureId) {
+      throw new Error("撮影済みのカード内容が見つかりません。もう一度プレビューしてください。");
+    }
+    const { scene, images, memo, frontNote } = capture;
+    const simulation = await analyzeScene(scene);
+    if (currentScene?.sceneId === scene.sceneId) currentSimulation = simulation;
     const duplicates = await anki.findDuplicates(scene.sceneId, "BigCoach_ID").catch(() => []);
     const deckChoices = await ankiDeckChoices(settings.deckName);
-    const html = cardHtml(scene, currentSimulation, memo, {
+    const html = cardHtml(scene, simulation, memo, {
       front: images.frontDataUrl,
       back: images.backDataUrl
     }, "preview", { frontNote });
@@ -1404,14 +1432,15 @@ function registerIpc() {
     currentCardPreview = {
       previewId,
       scene,
-      simulation: currentSimulation,
+      simulation,
       images,
       memo: memo || "",
       frontNote,
       html,
-      comparison: comparisonStatus(scene, currentSimulation),
+      comparison: comparisonStatus(scene, simulation),
       captureDiagnostics: images.captureDiagnostics
     };
+    if (currentCardCapture?.captureId === capture.captureId) currentCardCapture = null;
     return {
       previewId,
       scene,
@@ -1419,7 +1448,7 @@ function registerIpc() {
       duplicates,
       decks: deckChoices.decks,
       deckName: deckChoices.deckName,
-      simulation: currentSimulation,
+      simulation,
       comparison: currentCardPreview.comparison,
       captureDiagnostics: images.captureDiagnostics
     };
@@ -1485,6 +1514,7 @@ function registerIpc() {
     } finally {
       if (currentCardPreview?.previewId === payload.previewId) currentCardPreview = null;
       currentCardImages = null;
+      currentCardCapture = null;
     }
   });
   ipcMain.handle("app:open-logs", () => shell.openPath(logPath));

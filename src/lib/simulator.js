@@ -166,16 +166,16 @@ class SimulatorService {
 
   buildPayload(scene, settings, withWall) {
     if (!scene.handTiles.length) throw new Error("手牌を取得できていないため実行できません。");
-    const sceneShanten = Number(scene.shanten);
     const autoDisableDeepSearch = settings.autoDisableDeepSearch !== false;
-    const disableDeepSearchOptions = autoDisableDeepSearch && scene.shanten != null &&
-      Number.isFinite(sceneShanten) && sceneShanten >= 4;
     const payload = {
       game_mode: 1,
       enable_reddora: Boolean(settings.enableRedDora),
       enable_uradora: Boolean(settings.enableUraDora),
-      enable_shanten_down: Boolean(settings.enableShantenDown) && !disableDeepSearchOptions,
-      enable_tegawari: Boolean(settings.enableTegawari) && !disableDeepSearchOptions,
+      // The engine computes shanten from the actual hand and owns the automatic
+      // deep-search cutoff. BigCoach's displayed shanten can describe a different
+      // point in the review, so using it here can incorrectly remove valid routes.
+      enable_shanten_down: Boolean(settings.enableShantenDown),
+      enable_tegawari: Boolean(settings.enableTegawari),
       auto_disable_deep_search: autoDisableDeepSearch,
       enable_riichi: Boolean(settings.enableRiichi),
       enable_calls: Boolean(settings.enableCalls),

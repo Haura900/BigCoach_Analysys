@@ -369,33 +369,50 @@ $("#settings-save").addEventListener("click", async (event) => {
   toast("設定を保存しました");
 });
 
+let preparingCardPreview = false;
 $("#preview-card").addEventListener("click", async () => {
+  if (preparingCardPreview) return;
+  preparingCardPreview = true;
+  $("#preview-card").disabled = true;
+  let capture;
   try {
-    await action("何切る実行とカード画像作成中...", async () => {
-      const preview = await window.bigcoachApp.previewCard({
-        memo: $("#memo").value,
-        frontNote: $("#front-note").value
-      });
-      if (preview.scene) renderScene(preview.scene);
-      state.currentPreviewId = preview.previewId;
-      state.simulation = preview.simulation;
-      renderComparison(preview.comparison);
-      renderResults();
-      renderPreviewDecks(preview);
-      $("#front-preview").innerHTML = preview.front;
-      $("#back-preview").innerHTML = preview.back;
-      const warning = $("#duplicate-warning");
-      warning.classList.toggle("hidden", !preview.duplicates.length);
-      warning.textContent = preview.duplicates.length
-        ? `同じ局面IDのカードが ${preview.duplicates.length} 件あります。登録方法を選択してください。`
-        : "";
-      $("#preview-dialog").dataset.mode = "normal";
-      $("#preview-dialog").showModal();
-      await syncBigCoachVisibility();
-    });
+    capture = await action("カード画像を撮影中...", () => window.bigcoachApp.captureCardPreview({
+      memo: $("#memo").value,
+      frontNote: $("#front-note").value
+    }));
+    if (capture.scene) renderScene(capture.scene);
+    toast("撮影が完了しました。何切る解析をバックグラウンドで実行しています。");
   } catch {
+    preparingCardPreview = false;
+    $("#preview-card").disabled = false;
     await syncBigCoachVisibility();
+    return;
   }
+
+  window.bigcoachApp.finishCardPreview({ captureId: capture.captureId }).then(async (preview) => {
+    if (preview.scene) renderScene(preview.scene);
+    state.currentPreviewId = preview.previewId;
+    state.simulation = preview.simulation;
+    renderComparison(preview.comparison);
+    renderResults();
+    renderPreviewDecks(preview);
+    $("#front-preview").innerHTML = preview.front;
+    $("#back-preview").innerHTML = preview.back;
+    const warning = $("#duplicate-warning");
+    warning.classList.toggle("hidden", !preview.duplicates.length);
+    warning.textContent = preview.duplicates.length
+      ? `同じ局面IDのカードが ${preview.duplicates.length} 件あります。登録方法を選択してください。`
+      : "";
+    $("#preview-dialog").dataset.mode = "normal";
+    $("#preview-dialog").showModal();
+    await syncBigCoachVisibility();
+  }).catch(async (error) => {
+    toast(error.message || String(error), true);
+    await syncBigCoachVisibility();
+  }).finally(() => {
+    preparingCardPreview = false;
+    $("#preview-card").disabled = false;
+  });
 });
 
 $("#preview-close").addEventListener("click", () => {

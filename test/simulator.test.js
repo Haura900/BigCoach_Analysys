@@ -96,7 +96,7 @@ test("concealed kan is sent as ankan with all four tiles", () => {
   assert.deepEqual(payload.melds, [{ type: 2, tiles: [17, 17, 17, 17] }]);
 });
 
-test("four shanten and deeper force shanten-down and tegawari off", () => {
+test("external scene shanten does not pre-disable engine deep-search options", () => {
   const settings = {
     enableShantenDown: true,
     enableTegawari: true
@@ -104,8 +104,9 @@ test("four shanten and deeper force shanten-down and tegawari off", () => {
   const fourShanten = service().buildPayload({ ...scene, shanten: 4 }, settings, false);
   const threeShanten = service().buildPayload({ ...scene, shanten: 3 }, settings, false);
 
-  assert.equal(fourShanten.enable_shanten_down, false);
-  assert.equal(fourShanten.enable_tegawari, false);
+  assert.equal(fourShanten.enable_shanten_down, true);
+  assert.equal(fourShanten.enable_tegawari, true);
+  assert.equal(fourShanten.auto_disable_deep_search, true);
   assert.equal(threeShanten.enable_shanten_down, true);
   assert.equal(threeShanten.enable_tegawari, true);
 });
