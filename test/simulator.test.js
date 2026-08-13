@@ -38,6 +38,7 @@ test("new simulator payload enables exact Shapley and maps tsumo share to ron ra
   assert.equal(payload.calc_shapley_stats, true);
   assert.ok(Math.abs(payload.ron_rate - 0.7) < 1e-12);
   assert.equal(payload.remaining_tiles, 69);
+  assert.equal(payload.t_min, 1);
   assert.equal(payload.enable_riichi, true);
   assert.equal(payload.enable_calls, true);
   assert.equal(payload.enable_turn_yaku, true);
@@ -74,6 +75,7 @@ test("all simulator settings map to their engine request fields", () => {
   assert.ok(Math.abs(payload.other_win_hazard[16] - 0.117) < 1e-12);
   assert.ok(Math.abs(payload.other_win_hazard[17] - 0.117) < 1e-12);
   assert.ok(Math.abs(payload.ron_rate - 0.63) < 1e-12);
+  assert.equal(service().buildPayload({ ...scene, remainingTiles: 48 }, {}, false).t_min, 6);
 });
 
 test("concealed kan is sent as ankan with all four tiles", () => {

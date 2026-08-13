@@ -165,6 +165,9 @@ class SimulatorService {
   buildPayload(scene, settings, withWall) {
     if (!scene.handTiles.length) throw new Error("手牌を取得できていないため実行できません。");
     const autoDisableDeepSearch = settings.autoDisableDeepSearch !== false;
+    const turn = Number.isInteger(scene.remainingTiles)
+      ? clamp(18 - Math.floor(scene.remainingTiles / 4), 1, 18)
+      : clamp(scene.currentTurn || 1, 1, 18);
     const payload = {
       game_mode: 1,
       enable_reddora: Boolean(settings.enableRedDora),
@@ -184,6 +187,9 @@ class SimulatorService {
       calc_stats: true,
       calc_yaku_stats: true,
       calc_shapley_stats: true,
+      // Values before the displayed turn are never consumed. Starting the
+      // backwards DP here preserves this turn's result and avoids dead work.
+      t_min: turn,
       ron_rate: 1 - clamp(settings.tsumoWinSharePercent ?? 100, 0, 100) / 100,
       round_wind: windToIndex(scene.roundWind),
       dora_indicators: codesToIndices(scene.doraTiles),
