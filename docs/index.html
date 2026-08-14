@@ -72,6 +72,13 @@
           </div>
           <a id="bookmarklet" class="bookmarklet" href="#">Luck JSONをコピー</a>
         </div>
+        <div class="bookmarklet-box history-bookmarklet-box">
+          <div>
+            <strong>履歴一覧からまとめて取得</strong>
+            <span>このボタンも登録し、BigCoachの /account/history 上で実行</span>
+          </div>
+          <a id="history-bookmarklet" class="bookmarklet" href="#">Luck履歴を一括保存</a>
+        </div>
         <button id="demo-button" class="text-button">まずデモデータで試す →</button>
       </section>
     </section>
@@ -95,6 +102,21 @@
       </div>
 
       <div id="metrics" class="metrics" hidden>
+        <article class="overall-card">
+          <div>
+            <p class="eyebrow">OVERALL LUCK</p>
+            <h3>総合運</h3>
+            <p id="overall-label" class="overall-label">—</p>
+          </div>
+          <div class="overall-score">
+            <strong id="overall-score">—</strong><small>/ 100</small>
+          </div>
+          <div class="overall-breakdown">
+            <p id="overall-detail"></p>
+            <div id="overall-components" class="overall-components"></div>
+          </div>
+        </article>
+
         <article class="metric-card metric-deal">
           <div class="metric-head"><span>01</span><h3>配牌運</h3><i>経験分布</i></div>
           <div class="metric-value"><strong id="deal-percentile">—</strong><small>percentile</small></div>
@@ -114,9 +136,9 @@
         <article class="metric-card metric-dealin">
           <div class="metric-head"><span>03</span><h3>放銃運</h3><i>確率差</i></div>
           <div class="metric-value"><strong id="dealin-z">—</strong><small>σ</small></div>
-          <div class="sigma-line reverse"><span></span><b id="dealin-marker"></b></div>
+          <div class="sigma-line"><span></span><b id="dealin-marker"></b></div>
           <p id="dealin-detail" class="metric-detail"></p>
-          <p class="metric-note">同じ式で評価。プラスほど予測より放銃が多く、不運。</p>
+          <p class="metric-note">内部計算は同じ式。表示は符号を反転し、プラスほど放銃が少なく幸運。</p>
         </article>
 
         <article class="metric-card metric-points">
