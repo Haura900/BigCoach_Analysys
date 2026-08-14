@@ -6,6 +6,8 @@
   "use strict";
 
   const VERSION = 1;
+  const DEAL_MIN_POOL = 30;
+  const POINT_MIN_POOL = 10;
 
   function clampProbability(value) {
     const numeric = Number(value);
@@ -151,6 +153,30 @@
     return (hash >>> 0).toString(36);
   }
 
+  function gameSignature(data) {
+    const explicitId = [
+      data?.paipu_id,
+      data?.paipuId,
+      data?.game_id,
+      data?.gameId,
+      data?.uuid
+    ].find((value) => value != null && String(value).trim());
+    if (explicitId != null) return `id:${String(explicitId).trim()}`;
+    if (Array.isArray(data?.mjai_log) && data.mjai_log.length) {
+      return `mjai:${JSON.stringify(data.mjai_log)}`;
+    }
+    if (Array.isArray(data?.split_logs) && data.split_logs.length) {
+      return `split:${JSON.stringify(data.split_logs)}`;
+    }
+    const rounds = (data?.review?.kyokus || []).map((kyoku) => ({
+      kyoku: kyoku?.kyoku,
+      honba: kyoku?.honba,
+      end_status: kyoku?.end_status || [],
+      actions: (kyoku?.entries || []).map((entry) => entry?.actual || null)
+    }));
+    return `rounds:${JSON.stringify(rounds)}`;
+  }
+
   function analyzePayload(payload, meta = {}) {
     const data = unwrapPayload(payload);
     const kyokus = Array.isArray(data.review?.kyokus) ? data.review.kyokus : [];
@@ -213,9 +239,12 @@
     });
 
     const signature = JSON.stringify(rounds);
+    const sourceSignature = gameSignature(data);
+    const gameId = `bc-game-${hashText(sourceSignature)}-${sourceSignature.length.toString(36)}`;
     return {
       schemaVersion: VERSION,
       id: `bc-${hashText(signature)}`,
+      gameId,
       sourceUrl: meta.sourceUrl || "",
       title: meta.title || `BigCoach解析 ${kyokus.length}局`,
       importedAt: meta.importedAt || new Date().toISOString(),
@@ -272,6 +301,16 @@
       (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
   }
 
+  function normalCdf(value) {
+    const x = Number(value);
+    if (!Number.isFinite(x)) return null;
+    const sign = x < 0 ? -1 : 1;
+    const scaled = Math.abs(x) / Math.sqrt(2);
+    const t = 1 / (1 + 0.3275911 * scaled);
+    const erf = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-scaled * scaled);
+    return 0.5 * (1 + sign * erf);
+  }
+
   function summarize(records, selectedId = null) {
     const allRecords = Array.isArray(records) ? records : [];
     const selected = selectedId ? allRecords.filter((record) => record.id === selectedId) : allRecords;
@@ -289,27 +328,87 @@
     const riichiEvents = subjectRounds.map((round) => round.riichi).filter((event) => event?.p != null);
     const riskEvents = subjectRounds.flatMap((round) => round.risks || []);
     const pointEvents = subjectRounds.map((round) => round.points).filter((event) => event?.diff != null);
+    const pointPool = allRecords.flatMap((record) => record.rounds || [])
+      .map((round) => round.points?.diff)
+      .filter((value) => value != null);
     const wins = subjectRounds.map((round) => round.points).filter(Boolean);
     const pointDiff = pointEvents.reduce((sum, event) => sum + event.diff, 0);
+    const pointMean = pointEvents.length ? pointDiff / pointEvents.length : null;
+    const pointPercentile = empiricalPercentile(pointMean, pointPool);
+    const pointZ = pointPercentile == null
+      ? null
+      : inverseNormal(Math.min(0.995, Math.max(0.005, pointPercentile / 100)));
+    const deal = { n: dealValues.length, mean: dealMean, percentile, z: percentileZ, poolN: poolDeals.length };
+    const riichi = sigma(riichiEvents);
+    const dealIn = sigma(riskEvents);
+    dealIn.luckZ = dealIn.z == null ? null : -dealIn.z;
+    const points = {
+      n: pointEvents.length,
+      wins: wins.length,
+      expected: pointEvents.reduce((sum, event) => sum + event.expected, 0),
+      actual: pointEvents.reduce((sum, event) => sum + event.actual, 0),
+      diff: pointDiff,
+      meanDiff: pointMean,
+      percentile: pointPercentile,
+      z: pointZ,
+      poolN: pointPool.length,
+      uraSupported: wins.some((event) => event.uraCount != null),
+      uraCount: wins.reduce((sum, event) => sum + Number(event.uraCount || 0), 0),
+      uraIndicators: wins.reduce((sum, event) => sum + Number(event.uraIndicators || 0), 0),
+      ippatsuSupported: wins.some((event) => event.ippatsu != null),
+      ippatsuCount: wins.filter((event) => event.ippatsu === true).length
+    };
+    const componentCandidates = [
+      {
+        key: "deal",
+        label: "配牌",
+        z: deal.z,
+        included: deal.poolN >= DEAL_MIN_POOL && deal.z != null,
+        reason: deal.z == null ? "対象局なし" : `基準分布 ${deal.poolN}/${DEAL_MIN_POOL}局`
+      },
+      {
+        key: "riichi",
+        label: "リーチ後和了",
+        z: riichi.z,
+        included: riichi.z != null,
+        reason: riichi.n ? "分散を計算できません" : "対象リーチなし"
+      },
+      {
+        key: "dealIn",
+        label: "放銃回避",
+        z: dealIn.luckZ,
+        included: dealIn.luckZ != null,
+        reason: dealIn.n ? "分散を計算できません" : "対象打牌なし"
+      },
+      {
+        key: "points",
+        label: "打点",
+        z: points.z,
+        included: points.poolN >= POINT_MIN_POOL && points.z != null,
+        reason: points.z == null ? "対象和了なし" : `期待打点つき和了 ${points.poolN}/${POINT_MIN_POOL}件`
+      }
+    ];
+    const included = componentCandidates.filter((component) => component.included);
+    const overallZ = included.length
+      ? included.reduce((sum, component) => sum + component.z, 0) / Math.sqrt(included.length)
+      : null;
+    const overallScore = overallZ == null ? null : normalCdf(overallZ) * 100;
 
     return {
       records: selected.length,
       rounds: subjectRounds.length,
-      deal: { n: dealValues.length, mean: dealMean, percentile, z: percentileZ, poolN: poolDeals.length },
-      riichi: sigma(riichiEvents),
-      dealIn: sigma(riskEvents),
-      points: {
-        n: pointEvents.length,
-        wins: wins.length,
-        expected: pointEvents.reduce((sum, event) => sum + event.expected, 0),
-        actual: pointEvents.reduce((sum, event) => sum + event.actual, 0),
-        diff: pointDiff,
-        meanDiff: pointEvents.length ? pointDiff / pointEvents.length : null,
-        uraSupported: wins.some((event) => event.uraCount != null),
-        uraCount: wins.reduce((sum, event) => sum + Number(event.uraCount || 0), 0),
-        uraIndicators: wins.reduce((sum, event) => sum + Number(event.uraIndicators || 0), 0),
-        ippatsuSupported: wins.some((event) => event.ippatsu != null),
-        ippatsuCount: wins.filter((event) => event.ippatsu === true).length
+      deal,
+      riichi,
+      dealIn,
+      points,
+      overall: {
+        z: overallZ,
+        score: overallScore,
+        included,
+        excluded: componentCandidates.filter((component) => !component.included),
+        totalComponents: componentCandidates.length,
+        dealMinimum: DEAL_MIN_POOL,
+        pointMinimum: POINT_MIN_POOL
       }
     };
   }
@@ -340,11 +439,14 @@
 
   return {
     VERSION,
+    DEAL_MIN_POOL,
+    POINT_MIN_POOL,
     analyzePayload,
     summarize,
     sigma,
     empiricalPercentile,
     inverseNormal,
+    normalCdf,
     unwrapPayload,
     extractEmbeddedJson
   };

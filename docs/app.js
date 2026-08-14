@@ -17,6 +17,7 @@
     file: document.querySelector("#file-input"),
     status: document.querySelector("#import-status"),
     bookmarklet: document.querySelector("#bookmarklet"),
+    historyBookmarklet: document.querySelector("#history-bookmarklet"),
     demo: document.querySelector("#demo-button"),
     empty: document.querySelector("#empty-state"),
     metrics: document.querySelector("#metrics"),
@@ -103,18 +104,52 @@
 
   function addPayload(payload, meta = {}) {
     const record = analyzer.analyzePayload(payload, meta);
-    const existing = records.findIndex((item) => item.id === record.id);
+    const existing = records.findIndex((item) =>
+      (record.gameId && item.gameId === record.gameId) || item.id === record.id
+    );
     if (existing >= 0) {
-      records[existing] = { ...record, importedAt: records[existing].importedAt };
-      setStatus("同じ牌譜を更新しました。重複登録はしていません。", "success");
+      selectedId = records[existing].id;
+      scope = "selected";
+      setStatus("同じ対局はすでに保存済みのため、重複登録を除外しました。", "success");
     } else {
       records.unshift(record);
+      selectedId = record.id;
+      scope = "selected";
       setStatus(`${record.rounds.length}局を解析し、この端末に保存しました。`, "success");
     }
-    selectedId = record.id;
-    scope = "selected";
     saveRecords();
     render();
+    document.querySelector("#dashboard").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function addBundle(bundle) {
+    const incoming = Array.isArray(bundle?.items) ? bundle.items : [];
+    if (!incoming.length) throw new Error("一括取得ファイルに解析可能な牌譜がありません。");
+    const added = [];
+    let duplicates = 0;
+    let failed = 0;
+    for (const item of incoming) {
+      try {
+        const record = analyzer.analyzePayload(item.data || item, {
+          sourceUrl: item.sourceUrl || "",
+          title: item.title || (item.taskId ? `BigCoach ${String(item.taskId).slice(0, 8)}` : "BigCoach解析")
+        });
+        const exists = [...records, ...added].some((saved) =>
+          (record.gameId && saved.gameId === record.gameId) || saved.id === record.id
+        );
+        if (exists) duplicates += 1;
+        else added.push(record);
+      } catch {
+        failed += 1;
+      }
+    }
+    records.unshift(...added);
+    selectedId = null;
+    scope = "all";
+    saveRecords();
+    render();
+    const remoteFailures = Number(bundle?.failures?.length || 0);
+    setStatus(`一括取込: ${added.length}対局を追加、${duplicates}件の重複を除外、${failed + remoteFailures}件を取得・解析できませんでした。`, added.length ? "success" : "error");
     document.querySelector("#dashboard").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -177,7 +212,9 @@
     const trimmed = text.trim();
     if (!trimmed) throw new Error("内容が空です。");
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      addPayload(JSON.parse(trimmed), meta);
+      const parsed = JSON.parse(trimmed);
+      if (parsed?.kind === "bigcoach-luck-bundle") addBundle(parsed);
+      else addPayload(parsed, meta);
       return;
     }
     const extracted = analyzer.extractEmbeddedJson(trimmed);
@@ -208,23 +245,39 @@
     return "おおむね想定内";
   }
 
-  function setSigma(prefix, result, reverse = false) {
+  function setSigma(prefix, result) {
     document.querySelector(`#${prefix}-z`).textContent = result.z == null ? "—" : signed(result.z, 2).replace("+", "+").replace("−", "−");
     document.querySelector(`#${prefix}-detail`).textContent = result.n
-      ? `${scoreLabel(result.z, reverse)} · 実績 ${formatNumber(result.observed, 0)} / 期待 ${formatNumber(result.expected, 2)}（n=${result.n}）`
+      ? `${scoreLabel(result.z)} · 実績 ${formatNumber(result.observed, 0)} / 期待 ${formatNumber(result.expected, 2)}（n=${result.n}）`
       : "評価できる予測確率がありません";
     const position = result.z == null ? 50 : Math.max(4, Math.min(96, 50 + result.z * 13));
     document.querySelector(`#${prefix}-marker`).style.left = `${position}%`;
   }
 
   function renderMetrics(summary) {
+    const overall = summary.overall;
+    document.querySelector("#overall-score").textContent = overall.score == null ? "—" : formatNumber(overall.score, 0);
+    document.querySelector("#overall-label").textContent = overall.score == null
+      ? "評価できる指標を蓄積中"
+      : overall.score >= 90 ? "かなり運が良い"
+        : overall.score >= 70 ? "やや運が良い"
+          : overall.score <= 10 ? "かなり運が悪い"
+            : overall.score <= 30 ? "やや運が悪い" : "おおむね標準的";
+    document.querySelector("#overall-detail").textContent = overall.z == null
+      ? "総合運に入れられる指標がまだありません。"
+      : `${overall.included.length}/${overall.totalComponents}指標を合成 · ${signed(overall.z, 2)}σ相当。プラスほど幸運です。`;
+    const overallComponents = document.querySelector("#overall-components");
+    overallComponents.replaceChildren(
+      ...overall.included.map((component) => overallChip(`${component.label} ${signed(component.z, 2)}σ`, false)),
+      ...overall.excluded.map((component) => overallChip(`${component.label}: ${component.reason}`, true))
+    );
     document.querySelector("#deal-percentile").textContent = summary.deal.percentile == null ? "—" : formatNumber(summary.deal.percentile, 0);
     document.querySelector("#deal-meter").style.width = `${summary.deal.percentile || 0}%`;
     document.querySelector("#deal-detail").textContent = summary.deal.n
-      ? `平均和了確率 ${formatNumber(summary.deal.mean * 100, 1)}% · ${signed(summary.deal.z, 2)}σ相当（${summary.deal.n}局 / 分布${summary.deal.poolN}局）`
+      ? `平均和了確率 ${formatNumber(summary.deal.mean * 100, 1)}% · ${signed(summary.deal.z, 2)}σ相当（${summary.deal.n}局 / 分布${summary.deal.poolN}局）${summary.deal.poolN < overall.dealMinimum ? ` · 総合運への算入は${overall.dealMinimum}局から` : ""}`
       : "初回予測確率を取得できませんでした";
-    setSigma("riichi", summary.riichi, false);
-    setSigma("dealin", summary.dealIn, true);
+    setSigma("riichi", summary.riichi);
+    setSigma("dealin", { ...summary.dealIn, z: summary.dealIn.luckZ });
 
     document.querySelector("#points-diff").textContent = summary.points.n ? signed(Math.round(summary.points.diff), 0) : "—";
     document.querySelector("#points-support").textContent = summary.points.n ? "期待差" : "未対応";
@@ -237,6 +290,13 @@
       supportChip(summary.points.uraSupported ? `裏ドラ ${summary.points.uraCount}枚` : "裏ドラ実枚数", summary.points.uraSupported),
       supportChip(summary.points.ippatsuSupported ? `一発 ${summary.points.ippatsuCount}回` : "一発", summary.points.ippatsuSupported)
     );
+  }
+
+  function overallChip(label, excluded) {
+    const span = document.createElement("span");
+    span.className = excluded ? "excluded" : "";
+    span.textContent = label;
+    return span;
   }
 
   function supportChip(label, supported) {
@@ -318,6 +378,15 @@
       if (location.protocol.startsWith("http")) {
         event.preventDefault();
         setStatus("このボタンはクリックではなく、ブックマークバーへドラッグして登録してください。", "loading");
+      }
+    });
+
+    const historyCode = `(async()=>{let box;try{if(!location.pathname.startsWith('/account/history'))throw Error('BigCoachの履歴画面で実行してください');box=document.createElement('div');Object.assign(box.style,{position:'fixed',right:'18px',bottom:'18px',zIndex:2147483647,padding:'14px 18px',borderRadius:'10px',background:'#10201c',color:'#fff',font:'13px sans-serif',boxShadow:'0 8px 30px #0006'});box.textContent='Luck履歴: 一覧を取得中…';document.body.append(box);let rows=[],offset=0,total=1;while(offset<total){const res=await fetch('/api/v2/membership/history?limit=100&offset='+offset+'&category=real',{credentials:'include'});if(!res.ok)throw Error('履歴API HTTP '+res.status);const raw=await res.json(),page=raw?.success===false?null:(raw?.data||raw);if(!page)throw Error(raw?.error?.message||'履歴を取得できません');const batch=Array.isArray(page.items)?page.items:[];rows.push(...batch);total=Number(page.total??rows.length);if(!batch.length)break;offset+=batch.length;box.textContent='Luck履歴: 一覧 '+Math.min(offset,total)+' / '+total;}const unique=[...new Map(rows.filter(x=>x?.taskId&&x.reviewKind!=='what_cut').map(x=>[x.taskId,x])).values()],items=[],failures=[];for(let i=0;i<unique.length;i+=3){box.textContent='Luck履歴: 解析JSON '+Math.min(i+1,unique.length)+' / '+unique.length;const group=await Promise.all(unique.slice(i,i+3).map(async row=>{try{const response=await fetch('/api/v2/tasks/'+encodeURIComponent(row.taskId)+'/result',{credentials:'include'});if(!response.ok)throw Error('HTTP '+response.status);const result=await response.json();if(!result?.success||!result?.data?.jsonUrl)throw Error(result?.message||'JSON URLなし');const dataResponse=await fetch(result.data.jsonUrl,{credentials:'include'});if(!dataResponse.ok)throw Error('JSON HTTP '+dataResponse.status);const data=await dataResponse.json();return{taskId:row.taskId,sourceUrl:location.origin+'/review/'+row.taskId,title:[row.playerName,row.lastSubmittedAt?new Date(row.lastSubmittedAt).toLocaleDateString('ja-JP'):null].filter(Boolean).join(' · ')||'BigCoach '+row.taskId.slice(0,8),data};}catch(e){failures.push({taskId:row.taskId,error:e.message});return null;}}));items.push(...group.filter(Boolean));}const bundle={kind:'bigcoach-luck-bundle',version:1,exportedAt:new Date().toISOString(),source:location.href,items,failures};const blob=new Blob([JSON.stringify(bundle)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='bigcoach-luck-history-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);box.remove();alert(items.length+'対局を保存しました。Luck Analyzerの「ファイル」から読み込んでください。'+(failures.length?' 取得不能: '+failures.length+'件':''));}catch(e){box?.remove();alert('一括取得できませんでした: '+e.message)}})()`;
+    elements.historyBookmarklet.href = `javascript:${encodeURIComponent(historyCode)}`;
+    elements.historyBookmarklet.addEventListener("click", (event) => {
+      if (location.protocol.startsWith("http")) {
+        event.preventDefault();
+        setStatus("「Luck履歴を一括保存」をブックマークバーへドラッグし、BigCoachの履歴一覧で実行してください。", "loading");
       }
     });
   }

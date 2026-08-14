@@ -64,3 +64,46 @@ test("accepts data wrapper and rejects metadata-only result", () => {
   assert.equal(analyzePayload({ data: payload }).rounds.length, 1);
   assert.throws(() => analyzePayload({ success: true, data: { jsonUrl: "/x" } }), /review\.kyokus/);
 });
+
+test("deal luck stays out of overall luck until the 30-round pool is ready", () => {
+  const makeRecord = (count) => ({
+    id: `r-${count}`,
+    rounds: Array.from({ length: count }, (_, index) => ({
+      deal: { p: 0.1 + index * 0.01, y: 0 },
+      riichi: null,
+      risks: [],
+      points: null
+    }))
+  });
+  const before = summarize([makeRecord(29)]);
+  assert.equal(before.overall.included.some((item) => item.key === "deal"), false);
+  assert.match(before.overall.excluded.find((item) => item.key === "deal").reason, /29\/30/);
+
+  const ready = summarize([makeRecord(30)]);
+  assert.equal(ready.overall.included.some((item) => item.key === "deal"), true);
+  assert.ok(Math.abs(ready.overall.score - 50) < 1e-5);
+});
+
+test("deal-in luck exposes the reversed sign for display and overall luck", () => {
+  const record = {
+    id: "deal-in",
+    rounds: [{ deal: null, riichi: null, risks: [{ p: 0.2, y: 1 }], points: null }]
+  };
+  const summary = summarize([record]);
+  assert.ok(summary.dealIn.z > 0);
+  assert.equal(summary.dealIn.luckZ, -summary.dealIn.z);
+  assert.equal(summary.overall.included.find((item) => item.key === "dealIn").z, summary.dealIn.luckZ);
+  assert.ok(summary.overall.score < 50);
+});
+
+test("same source game keeps a stable game id across changed model probabilities", () => {
+  const makePayload = (p) => ({
+    player_id: 0,
+    mjai_log: [{ type: "start_game", names: ["a", "b", "c", "d"] }, { type: "dahai", actor: 0, pai: "1m" }],
+    review: { kyokus: [{ kyoku: 0, entries: [entry({ p, risk: 0.01 })], end_status: [] }] }
+  });
+  const first = analyzePayload(makePayload(0.2));
+  const second = analyzePayload(makePayload(0.8));
+  assert.equal(first.gameId, second.gameId);
+  assert.notEqual(first.id, second.id);
+});
