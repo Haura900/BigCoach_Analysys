@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1917">
+  <meta name="description" content="BigCoachの解析JSONから、配牌・リーチ後和了・放銃・打点の運を端末内だけで評価します。">
+  <title>BigCoach Luck Analyzer</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="BigCoach Luck Analyzer ホーム">
+      <span class="brand-mark">運</span>
+      <span><b>BigCoach</b><small>Luck Analyzer</small></span>
+    </a>
+    <div class="local-badge"><span></span> データはこの端末だけ</div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">TIER 1 · MODEL FREE</p>
+        <h1>牌譜から、<br><em>運だけ</em>を切り分ける。</h1>
+        <p class="hero-lead">BigCoachの予測確率と実績を照合。技術評価とは混ぜず、偶然の上振れ・下振れを4つの指標で可視化します。</p>
+        <div class="hero-stats">
+          <div><strong id="hero-records">0</strong><span>保存牌譜</span></div>
+          <div><strong id="hero-rounds">0</strong><span>解析局</span></div>
+          <div><strong id="hero-pool">0</strong><span>配牌分布</span></div>
+        </div>
+      </div>
+
+      <section class="import-card" aria-labelledby="import-title">
+        <div class="card-kicker">IMPORT REVIEW</div>
+        <h2 id="import-title">解析データを取り込む</h2>
+        <div class="tabs" role="tablist" aria-label="取り込み方法">
+          <button class="tab is-active" data-tab="url" role="tab" aria-selected="true">URL</button>
+          <button class="tab" data-tab="paste" role="tab" aria-selected="false">JSON / HTML</button>
+          <button class="tab" data-tab="file" role="tab" aria-selected="false">ファイル</button>
+        </div>
+
+        <div class="tab-panel is-active" data-panel="url">
+          <label for="review-url">BigCoachレビューURL</label>
+          <div class="input-row">
+            <input id="review-url" type="url" placeholder="https://gokujan.com/review/..." autocomplete="off">
+            <button id="fetch-button" class="primary-button">取得を試す</button>
+          </div>
+          <p class="hint">ブラウザのCORS制限で直接取得できない場合は、下のブックマークレットかJSON貼り付けを使えます。</p>
+        </div>
+
+        <div class="tab-panel" data-panel="paste" hidden>
+          <label for="paste-input">BigCoach解析JSON、または保存したページHTML</label>
+          <textarea id="paste-input" rows="7" placeholder='{"engine":"Mortal","review":{"kyokus":[...]}}'></textarea>
+          <button id="paste-button" class="primary-button wide">貼り付け内容を解析</button>
+        </div>
+
+        <div class="tab-panel" data-panel="file" hidden>
+          <label class="file-drop" for="file-input">
+            <span class="file-icon">↥</span>
+            <strong>JSON / HTMLを選択</strong>
+            <small>ファイルはサーバーへ送信されません</small>
+          </label>
+          <input id="file-input" type="file" accept=".json,.html,.htm,application/json,text/html" hidden>
+        </div>
+
+        <div id="import-status" class="status" role="status" aria-live="polite"></div>
+        <div class="bookmarklet-box">
+          <div>
+            <strong>1クリックでJSONをコピー</strong>
+            <span>下のボタンをブックマークバーへドラッグし、BigCoachレビュー上で実行</span>
+          </div>
+          <a id="bookmarklet" class="bookmarklet" href="#">Luck JSONをコピー</a>
+        </div>
+        <button id="demo-button" class="text-button">まずデモデータで試す →</button>
+      </section>
+    </section>
+
+    <section id="dashboard" class="dashboard section-shell" aria-labelledby="dashboard-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">LUCK DASHBOARD</p>
+          <h2 id="dashboard-title">蓄積サマリー</h2>
+        </div>
+        <div class="scope-switch" id="scope-switch" hidden>
+          <button class="is-active" data-scope="all">全牌譜</button>
+          <button data-scope="selected">選択牌譜</button>
+        </div>
+      </div>
+
+      <div id="empty-state" class="empty-state">
+        <span>◌</span>
+        <h3>まだ解析データがありません</h3>
+        <p>上の取り込み欄からJSONを追加すると、4つの運指標がここに表示されます。</p>
+      </div>
+
+      <div id="metrics" class="metrics" hidden>
+        <article class="metric-card metric-deal">
+          <div class="metric-head"><span>01</span><h3>配牌運</h3><i>経験分布</i></div>
+          <div class="metric-value"><strong id="deal-percentile">—</strong><small>percentile</small></div>
+          <div class="meter"><span id="deal-meter"></span></div>
+          <p id="deal-detail" class="metric-detail"></p>
+          <p class="metric-note">初回意思決定時の和了確率を、端末内に蓄積した局分布と比較。</p>
+        </article>
+
+        <article class="metric-card metric-riichi">
+          <div class="metric-head"><span>02</span><h3>リーチ後和了運</h3><i>確率差</i></div>
+          <div class="metric-value"><strong id="riichi-z">—</strong><small>σ</small></div>
+          <div class="sigma-line"><span></span><b id="riichi-marker"></b></div>
+          <p id="riichi-detail" class="metric-detail"></p>
+          <p class="metric-note">Σ(Y−p) / √Σp(1−p)。プラスほど期待以上の和了。</p>
+        </article>
+
+        <article class="metric-card metric-dealin">
+          <div class="metric-head"><span>03</span><h3>放銃運</h3><i>確率差</i></div>
+          <div class="metric-value"><strong id="dealin-z">—</strong><small>σ</small></div>
+          <div class="sigma-line reverse"><span></span><b id="dealin-marker"></b></div>
+          <p id="dealin-detail" class="metric-detail"></p>
+          <p class="metric-note">同じ式で評価。プラスほど予測より放銃が多く、不運。</p>
+        </article>
+
+        <article class="metric-card metric-points">
+          <div class="metric-head"><span>04</span><h3>打点運</h3><i id="points-support">期待差</i></div>
+          <div class="metric-value"><strong id="points-diff">—</strong><small>点</small></div>
+          <p id="points-detail" class="metric-detail"></p>
+          <div id="feature-support" class="feature-support"></div>
+          <p class="metric-note">和了時の期待打点と実績差。取得不能項目は未対応と明記。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="history section-shell" aria-labelledby="history-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">LOCAL ARCHIVE</p>
+          <h2 id="history-title">取り込み履歴</h2>
+        </div>
+        <button id="export-button" class="ghost-button" disabled>履歴をJSON保存</button>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </section>
+
+    <section class="method section-shell">
+      <div>
+        <p class="eyebrow">HOW IT WORKS</p>
+        <h2>評価方法</h2>
+      </div>
+      <div class="method-grid">
+        <article><span>p</span><h3>AIの予測</h3><p>BigCoach JSONに含まれる和了確率・放銃率・期待打点だけを使用します。</p></article>
+        <article><span>Y</span><h3>実際の結果</h3><p>和了・放銃なら1、そうでなければ0。打ち方の良し悪しとは分離します。</p></article>
+        <article><span>σ</span><h3>偶然の偏り</h3><p>予測との差を分散で標準化。|2σ|を超えるほど珍しい偏りです。</p></article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>BigCoach Luck Analyzer</span>
+    <p>完全静的・通信不要。保存先はブラウザのlocalStorageです。</p>
+    <a href="https://github.com/Haura900/BigCoach_Analysys">GitHub ↗</a>
+  </footer>
+
+  <template id="history-template">
+    <article class="history-item">
+      <button class="history-main">
+        <span class="history-date"></span>
+        <span class="history-title"></span>
+        <span class="history-meta"></span>
+        <span class="history-arrow">→</span>
+      </button>
+      <button class="delete-button" aria-label="この牌譜を削除">×</button>
+    </article>
+  </template>
+
+  <script src="./analyzer.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
