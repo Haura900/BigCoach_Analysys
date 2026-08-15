@@ -132,6 +132,18 @@ fieldset label.simulator-auto-option { flex-basis: 100%; }
 fieldset label.simulator-rate { flex-basis: 100%; justify-content: space-between; }
 fieldset label.simulator-rate input { width: 90px; margin-top: 0; }
 .other-win-hazard-settings { flex-basis: 100%; }
+.ev-parameter-settings { flex-basis: 100%; border-top: 1px solid var(--border); padding-top: 9px; }
+.ev-analysis-controls { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+.ev-analysis-controls label { margin: 0; }
+.ev-analysis-results { margin-top: 9px; display: grid; gap: 6px; max-height: 420px; overflow: auto; }
+.ev-analysis-results.empty { color: var(--muted); font-size: 12px; }
+.ev-analysis-item { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px; text-align: left; }
+.ev-analysis-rank { color: var(--muted); font: 11px Consolas, monospace; }
+.ev-analysis-position { font-weight: 750; }
+.ev-analysis-item strong { color: var(--danger); font: 14px Consolas, monospace; }
+.ev-analysis-choice, .ev-analysis-item small { grid-column: 1 / -1; }
+.ev-analysis-choice { font: 11px Consolas, monospace; }
+.ev-analysis-item small { color: var(--muted); font-size: 10px; }
 .other-win-hazard-title { margin-bottom: 6px; }
 .other-win-hazard-table { width: 100%; border-collapse: collapse; }
 .other-win-hazard-table th, .other-win-hazard-table td { padding: 3px 5px; text-align: center; }

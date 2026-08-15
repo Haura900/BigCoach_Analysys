@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { settings: null, scene: null, simulation: null, activeTab: "wall", history: [], tileImages: {}, currentPreviewId: null };
+const state = { settings: null, scene: null, simulation: null, evAnalysis: [], activeTab: "wall", history: [], tileImages: {}, currentPreviewId: null };
 const HAND_SCORE_SETTING_KEYS = [
   "handScoreDoraSingle",
   "handScoreDoraPair",
@@ -181,9 +181,12 @@ function analysisTable(analysis) {
           <tr><th>残差</th><td colspan="2">${residual.toFixed(4)}</td></tr></tfoot></table>${calledDetails}
       </details>`;
   };
-  return `<table><thead><tr><th>打牌</th><th>期待値</th><th>和了率</th><th>聴牌率</th><th>副露和了率</th><th>受入</th><th>役別Shapley<small class="scale-label">共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${
+  return `<table><thead><tr><th>打牌</th><th>和了EV</th><th>放銃EV</th><th>聴牌料EV</th><th>合計EV</th><th>和了率</th><th>聴牌率</th><th>副露和了率</th><th>受入</th><th>役別Shapley<small class="scale-label">共通上限 ${commonScale.toFixed(0)}点</small></th></tr></thead><tbody>${
     analysis.candidates.map((candidate, index) => `<tr class="${index === 0 ? "recommended" : ""}">
-      <td>${tile(candidate.tile)}</td><td>${candidate.expectedScore.toFixed(0)}</td>
+      <td>${tile(candidate.tile)}</td><td>${Number(candidate.winEv ?? candidate.expectedScore).toFixed(0)}</td>
+      <td>${Number(candidate.dealInEv || 0).toFixed(0)}</td>
+      <td>${Number(candidate.tenpaiEv || 0).toFixed(0)}</td>
+      <td><strong>${Number(candidate.totalEv ?? candidate.expectedScore).toFixed(0)}</strong></td>
       <td>${(candidate.winProbability * 100).toFixed(2)}%</td>
       <td>${(candidate.tenpaiProbability * 100).toFixed(2)}%</td>
       <td>${(candidate.callWinProbability * 100).toFixed(2)}%</td>
@@ -191,6 +194,30 @@ function analysisTable(analysis) {
         `<span>${tile(item.tile)}<small>×${item.count}</small></span>`).join("")}</div><small>${candidate.ukeireTotal}枚</small></td><td>${contributionHtml(candidate)}</td>
     </tr>`).join("")
   }</tbody></table>`;
+}
+
+function evBreakdownText(candidate) {
+  return `和了 ${Number(candidate?.winEv || 0).toFixed(0)} / 放銃 ${Number(candidate?.dealInEv || 0).toFixed(0)} / 聴牌料 ${Number(candidate?.tenpaiEv || 0).toFixed(0)}`;
+}
+
+function renderEvAnalysis(result) {
+  const items = Array.isArray(result) ? result : (result?.items || []);
+  state.evAnalysis = items;
+  const container = $("#ev-analysis-results");
+  if (!items.length) {
+    container.classList.add("empty");
+    container.textContent = "条件に該当する判断はありません";
+    return;
+  }
+  container.classList.remove("empty");
+  container.innerHTML = items.map((item, index) => `
+    <button class="ev-analysis-item" type="button" data-ev-index="${index}">
+      <span class="ev-analysis-rank">#${index + 1}</span>
+      <span class="ev-analysis-position">${escapeHtml(item.roundText)} ${Number(item.turn)}巡目</span>
+      <strong>${Number(item.evGap).toFixed(0)}点差</strong>
+      <span class="ev-analysis-choice">AI ${escapeHtml(item.recommended)} ${Number(item.recommendedEv).toFixed(0)} / 実打 ${escapeHtml(item.actual)} ${Number(item.actualEv).toFixed(0)}</span>
+      <small>${escapeHtml(evBreakdownText(item.actualBreakdown))}</small>
+    </button>`).join("");
 }
 
 function bigCoachTable(scene) {
@@ -245,6 +272,25 @@ function populateSettings() {
     if (input.type === "checkbox") input.checked = Boolean(value);
     else input.value = Array.isArray(value) ? value.join(", ") : value;
   }
+  const params = state.settings?.evHyperparameters || {};
+  const values = {
+    evHazardOpponentRiichi: params.hazard?.opponentRiichi,
+    evHazardOpponentDoubleRiichi: params.hazard?.opponentDoubleRiichi,
+    evHazardOpponentTwoMeld: params.hazard?.opponentTwoMeld,
+    evHazardSelfRiichi: params.hazard?.selfRiichi,
+    evVisibleDoraDelta: params.dealInPoints?.visibleDoraDelta,
+    evExposedDoraBonus: params.dealInPoints?.exposedDoraBonus,
+    evDiscardDoraBonus: params.dealInPoints?.discardDoraBonus,
+    evTenpaiPayment: params.tenpaiPayment,
+    evOpenRiskMultiplier: params.call?.openRiskMultiplier,
+    evDamaWinMultiplier: params.riichi?.damaWinMultiplier,
+    evDamaGenbutsuWinMultiplier: params.riichi?.damaGenbutsuWinMultiplier
+  };
+  for (const [name, value] of Object.entries(values)) {
+    const input = form.elements.namedItem(name);
+    if (input && value != null) input.value = value;
+  }
+  $("#ev-analysis-threshold").value = Number(state.settings?.evAnalysisRecommendationThresholdPercent ?? 0.1);
 }
 
 async function syncBigCoachVisibility() {
@@ -277,6 +323,7 @@ async function initialLoad() {
   if (state.simulation) renderResults();
   populateSettings();
   renderHistory(initial.history);
+  renderEvAnalysis(initial.evAnalysis || []);
 }
 
 $("#open-review-url").addEventListener("click", () => action("解析結果URLを開いています...", async () => {
@@ -329,6 +376,23 @@ $("#run-simulation").addEventListener("click", () => action("何切るシミュ�
   toast("シミュレーターが完了しました");
 }));
 
+$("#run-ev-analysis").addEventListener("click", () => action("対象局面のEV差を計算中...", async () => {
+  const threshold = Number($("#ev-analysis-threshold").value);
+  const result = await window.bigcoachApp.runEvAnalysis(threshold);
+  renderEvAnalysis(result);
+  toast(`${result.total}件をEV差順に並べました`);
+}));
+
+$("#ev-analysis-results").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-ev-index]");
+  if (!button) return;
+  action("該当巡へ移動中...", async () => {
+    const scene = await window.bigcoachApp.jumpToEvAnalysis(Number(button.dataset.evIndex));
+    renderScene(scene);
+    toast("該当巡へ移動しました");
+  });
+});
+
 $("#calculate-hand-score").addEventListener("click", () => action("配牌スコアを計算中...", async () => {
   const result = await window.bigcoachApp.calculateHandScore();
   if (result.scene) renderScene(result.scene);
@@ -353,7 +417,7 @@ $("#settings-save").addEventListener("click", async (event) => {
   const form = $("#settings-form");
   if (!form.reportValidity()) return;
   const data = Object.fromEntries(new FormData(form));
-  for (const name of ["enableRedDora", "enableUraDora", "enableShantenDown", "enableTegawari", "autoDisableDeepSearch", "enableRiichi", "enableCalls", "enableOtherWinStop"]) {
+  for (const name of ["enableRedDora", "enableUraDora", "enableShantenDown", "enableTegawari", "autoDisableDeepSearch", "enableRiichi", "enableCalls", "enableOtherWinStop", "enableSituationalEv"]) {
     data[name] = form.elements.namedItem(name).checked;
   }
   data.tags = data.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
@@ -363,6 +427,34 @@ $("#settings-save").addEventListener("click", async (event) => {
   data.otherWinHazardPercent = Array.from({ length: 18 }, (_, index) =>
     Number(form.elements.namedItem(`otherWinHazardPercent_${index + 1}`).value));
   data.otherWinHazardPercent[17] = data.otherWinHazardPercent[16];
+  data.evAnalysisRecommendationThresholdPercent = Number($("#ev-analysis-threshold").value);
+  data.evHyperparameters = {
+    ...(state.settings?.evHyperparameters || {}),
+    hazard: {
+      ...(state.settings?.evHyperparameters?.hazard || {}),
+      opponentRiichi: Number(data.evHazardOpponentRiichi),
+      opponentDoubleRiichi: Number(data.evHazardOpponentDoubleRiichi),
+      opponentTwoMeld: Number(data.evHazardOpponentTwoMeld),
+      selfRiichi: Number(data.evHazardSelfRiichi)
+    },
+    dealInPoints: {
+      ...(state.settings?.evHyperparameters?.dealInPoints || {}),
+      visibleDoraDelta: Number(data.evVisibleDoraDelta),
+      exposedDoraBonus: Number(data.evExposedDoraBonus),
+      discardDoraBonus: Number(data.evDiscardDoraBonus)
+    },
+    tenpaiPayment: Number(data.evTenpaiPayment),
+    call: {
+      ...(state.settings?.evHyperparameters?.call || {}),
+      openRiskMultiplier: Number(data.evOpenRiskMultiplier)
+    },
+    riichi: {
+      ...(state.settings?.evHyperparameters?.riichi || {}),
+      damaWinMultiplier: Number(data.evDamaWinMultiplier),
+      damaGenbutsuWinMultiplier: Number(data.evDamaGenbutsuWinMultiplier)
+    }
+  };
+  for (const name of ["evHazardOpponentRiichi", "evHazardOpponentDoubleRiichi", "evHazardOpponentTwoMeld", "evHazardSelfRiichi", "evVisibleDoraDelta", "evExposedDoraBonus", "evDiscardDoraBonus", "evTenpaiPayment", "evOpenRiskMultiplier", "evDamaWinMultiplier", "evDamaGenbutsuWinMultiplier"]) delete data[name];
   for (let turn = 1; turn <= 18; ++turn) delete data[`otherWinHazardPercent_${turn}`];
   state.settings = await action("設定を保存中...", () => window.bigcoachApp.saveSettings(data));
   await closeDialog($("#settings-dialog"));

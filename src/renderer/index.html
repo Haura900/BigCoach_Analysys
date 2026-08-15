@@ -74,6 +74,16 @@
       </div>
       <div id="results" class="results empty">シミュレーター未実行</div>
     </section>
+
+    <section>
+      <div class="section-title"><h2>EV差が大きい判断</h2></div>
+      <p class="muted">実打のBigCoach推奨度が指定値以下の判断だけを再計算し、EV差の大きい順に表示します。</p>
+      <div class="ev-analysis-controls">
+        <label>推奨度の上限（%）<input id="ev-analysis-threshold" type="number" min="0" max="100" step="0.01" value="0.1"></label>
+        <button id="run-ev-analysis" class="primary" type="button">一覧を計算</button>
+      </div>
+      <div id="ev-analysis-results" class="ev-analysis-results empty">未計算</div>
+    </section>
   </main>
 
   <dialog id="settings-dialog">
@@ -94,6 +104,7 @@
         <label><input name="enableRiichi" type="checkbox"> リーチ</label>
         <label><input name="enableCalls" type="checkbox"> 副露（1回先・進むポン／上家チー、初回両面チーなし）</label>
         <label class="simulator-auto-option"><input name="enableOtherWinStop" type="checkbox"> 他家の和了でシミュレーションを打ち切る</label>
+        <label class="simulator-auto-option"><input name="enableSituationalEv" type="checkbox"> 状態別ハザード・放銃・聴牌料をEVへ反映する（推奨、OFFは従来互換）</label>
         <div class="other-win-hazard-settings">
           <div class="other-win-hazard-title">他家和了ハザード（各巡の条件付き確率 %）</div>
           <table class="other-win-hazard-table">
@@ -104,6 +115,22 @@
         </div>
         <label class="simulator-auto-option"><input name="autoDisableDeepSearch" type="checkbox"> 4シャンテン以上でシャンテン戻し・手変わりを自動OFF</label>
         <label class="simulator-rate">和了のうちツモの割合（%）<input name="tsumoWinSharePercent" type="number" min="0" max="100" step="1"></label>
+        <div class="ev-parameter-settings">
+          <div class="other-win-hazard-title">状態別EVハイパーパラメータ</div>
+          <div class="form-grid score-grid">
+            <label>被リーチ倍率<input name="evHazardOpponentRiichi" type="number" min="0" max="10" step="0.01"></label>
+            <label>被2軒リーチ倍率<input name="evHazardOpponentDoubleRiichi" type="number" min="0" max="10" step="0.01"></label>
+            <label>被2副露倍率<input name="evHazardOpponentTwoMeld" type="number" min="0" max="10" step="0.01"></label>
+            <label>自分リーチ倍率<input name="evHazardSelfRiichi" type="number" min="0" max="10" step="0.01"></label>
+            <label>見えドラ1枚補正<input name="evVisibleDoraDelta" type="number" step="10"></label>
+            <label>副露面子ドラ1枚補正<input name="evExposedDoraBonus" type="number" step="10"></label>
+            <label>放銃牌ドラ補正<input name="evDiscardDoraBonus" type="number" step="10"></label>
+            <label>聴牌料期待値<input name="evTenpaiPayment" type="number" step="100"></label>
+            <label>副露後放銃倍率<input name="evOpenRiskMultiplier" type="number" min="0" max="10" step="0.01"></label>
+            <label>ダマ和了率倍率<input name="evDamaWinMultiplier" type="number" min="0" max="10" step="0.01"></label>
+            <label>現物待ちダマ倍率<input name="evDamaGenbutsuWinMultiplier" type="number" min="0" max="10" step="0.01"></label>
+          </div>
+        </div>
       </fieldset>
       <fieldset class="score-settings">
         <legend>配牌スコア計算</legend>

@@ -76,6 +76,113 @@ test("all simulator settings map to their engine request fields", () => {
   assert.ok(Math.abs(payload.ron_rate - 0.63) < 1e-12);
 });
 
+test("situational EV is opt-in and carries an additive defensive model", () => {
+  const off = service().buildPayload(scene, { enableSituationalEv: false }, false);
+  assert.equal("enable_situational_hazard" in off, false);
+  assert.equal("enable_ev_breakdown" in off, false);
+
+  const on = service().buildPayload({
+    ...scene,
+    atSelfRiichi: true,
+    candidates: [{ tile: "1m", dealInRate: 0.05 }],
+    opponents: [{ mode: "riichi", dealer: false, openMeldCount: 0 }]
+  }, { enableSituationalEv: true }, false);
+  assert.equal(on.enable_situational_hazard, true);
+  assert.equal(on.opponent_riichi_count, 1);
+  assert.equal(on.self_riichi, true);
+  assert.equal(on.enable_ev_breakdown, true);
+  assert.equal(on.deal_in_probability[0], 0.05);
+});
+
+test("EV breakdown is parsed and candidates are ranked by total EV", () => {
+  const result = service().parse({
+    stats: [
+      { tile: 0, shanten: 0, necessary_tiles: [], exp_score: [0, 1000], win_ev: [0, 1000], deal_in_ev: [0, -800], tenpai_ev: [0, 100], total_ev: [0, 300], win_prob: [0, 0.2], tenpai_prob: [0, 0.5] },
+      { tile: 1, shanten: 0, necessary_tiles: [], exp_score: [0, 800], win_ev: [0, 800], deal_in_ev: [0, -100], tenpai_ev: [0, 100], total_ev: [0, 800], win_prob: [0, 0.2], tenpai_prob: [0, 0.5] }
+    ]
+  }, scene);
+  assert.equal(result.recommendation, "2m");
+  assert.equal(result.candidates[0].totalEv, 800);
+  assert.equal(result.candidates[1].dealInEv, -800);
+  assert.equal(result.candidates[1].winEv + result.candidates[1].dealInEv + result.candidates[1].tenpaiEv, result.candidates[1].totalEv);
+});
+
+test("legacy engine compatibility scales hazards and computes the same additive breakdown locally", () => {
+  const legacyScene = {
+    ...scene,
+    atSelfRiichi: true,
+    candidates: [{ tile: "1m", dealInRate: 0.05, dealInByOpponent: [0.05] }],
+    opponents: [{ mode: "riichi", dealer: false, openMeldCount: 0 }]
+  };
+  const settings = {
+    enableSituationalEv: true,
+    enableOtherWinStop: true,
+    otherWinHazardPercent: Array(18).fill(10)
+  };
+  const simulator = service();
+  const legacyPayload = simulator.buildLegacySituationalPayload(legacyScene, settings, false);
+  assert.equal("enable_situational_hazard" in legacyPayload, false);
+  assert.equal("enable_ev_breakdown" in legacyPayload, false);
+  assert.ok(Math.abs(legacyPayload.other_win_hazard[0] - 0.1947) < 1e-12);
+
+  const result = simulator.parse({
+    stats: [{
+      tile: 0, shanten: 0, necessary_tiles: [], exp_score: [0, 1000],
+      win_prob: [0, 0.2], tenpai_prob: [0, 0.5]
+    }]
+  }, legacyScene, settings);
+  assert.equal(result.candidates[0].winEv, 1000);
+  assert.ok(result.candidates[0].dealInEv < 0);
+  assert.equal(result.candidates[0].tenpaiEv, 450);
+  assert.equal(result.candidates[0].totalEv,
+    result.candidates[0].winEv + result.candidates[0].dealInEv + result.candidates[0].tenpaiEv);
+});
+
+test("classic review deal-in probability is not lost when opponent details are unavailable", () => {
+  const classicScene = {
+    ...scene,
+    candidates: [
+      { tile: "7s", dealInRate: 0.035 },
+      { tile: "9s", dealInRate: 0.0005 }
+    ],
+    opponents: []
+  };
+  const settings = { enableSituationalEv: true };
+  const result = service().parse({
+    stats: [
+      { tile: 24, shanten: 2, necessary_tiles: [], exp_score: [0, 1095], win_prob: [0, 0.1545], tenpai_prob: [0, 0.1545] },
+      { tile: 26, shanten: 2, necessary_tiles: [], exp_score: [0, 557], win_prob: [0, 0.0699], tenpai_prob: [0, 0.0699] }
+    ]
+  }, classicScene, settings);
+  const sevenSou = result.candidates.find((candidate) => candidate.tile === "7s");
+  const nineSou = result.candidates.find((candidate) => candidate.tile === "9s");
+  assert.equal(sevenSou.dealInEv, -140);
+  assert.equal(nineSou.dealInEv, -2);
+  assert.equal(sevenSou.totalEv, sevenSou.winEv + sevenSou.dealInEv + sevenSou.tenpaiEv);
+});
+
+test("compatibility request detects a silently ignored extension and retries the legacy payload", async () => {
+  const simulator = service();
+  const payloads = [];
+  simulator.request = async (payload) => {
+    payloads.push(payload);
+    return { stats: [{ tile: 0, exp_score: [0], win_prob: [0], tenpai_prob: [0] }] };
+  };
+  await simulator.requestWithCompatibility({
+    ...scene,
+    candidates: [{ tile: "1m", dealInRate: 0.05 }],
+    opponents: [{ mode: "riichi", dealer: false, openMeldCount: 0 }]
+  }, {
+    enableSituationalEv: true,
+    otherWinHazardPercent: Array(18).fill(10)
+  }, false, 1000);
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0].enable_situational_hazard, true);
+  assert.equal("enable_situational_hazard" in payloads[1], false);
+  assert.equal(simulator.supportsSituationalEv, false);
+  assert.ok(payloads[1].other_win_hazard[0] > 0.1);
+});
+
 test("concealed kan is sent as ankan with all four tiles", () => {
   const ankanScene = {
     ...scene,

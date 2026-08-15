@@ -9,6 +9,12 @@
     41: "1z", 42: "2z", 43: "3z", 44: "4z", 45: "5z", 46: "6z", 47: "7z",
     51: "0m", 52: "0p", 53: "0s"
   };
+  const MORTAL_INDEX_TILES = [
+    "1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m",
+    "1p", "2p", "3p", "4p", "5p", "6p", "7p", "8p", "9p",
+    "1s", "2s", "3s", "4s", "5s", "6s", "7s", "8s", "9s",
+    "1z", "2z", "3z", "4z", "5z", "6z", "7z"
+  ];
   let currentModernReviewData = null;
   let modernCaptureStyle = null;
   let modernCaptureMode = null;
@@ -673,9 +679,137 @@
       tile: actionLabel(item.action),
       value: item.prob == null ? null : Number(item.prob),
       qValue: item.q_value == null ? null : Number(item.q_value),
+      dealInRate: item.houjuu_rate == null
+        ? Number(entry?.sl_deal_in_combined?.[item.action_index] || 0)
+        : Number(item.houjuu_rate),
+      dealInByOpponent: (entry?.sl_deal_in || []).map((rates) =>
+        Number(rates?.[item.action_index] || 0)),
+      action: normalizedAction(item.action),
       label: `${actionLabel(item.action) || item.action?.type || "操作"} / P ${Number(item.prob || 0).toFixed(6)} / Q ${Number(item.q_value || 0).toFixed(4)}`,
       raw: JSON.stringify(item)
     })).filter((item) => item.tile);
+  }
+
+  function normalizedAction(action) {
+    if (!action) return null;
+    return {
+      ...action,
+      ...(action.pai ? { pai: normalizeTile(action.pai) } : {}),
+      ...(Array.isArray(action.consumed)
+        ? { consumed: action.consumed.map(normalizeTile).filter(Boolean) }
+        : {})
+    };
+  }
+
+  function indicatorDora(indicator) {
+    const tile = normalizeForMeld(indicator);
+    if (!tile) return null;
+    const number = Number(tile[0]);
+    if (tile[1] !== "z") return `${number === 9 ? 1 : number + 1}${tile[1]}`;
+    if (number <= 4) return `${number === 4 ? 1 : number + 1}z`;
+    return `${number === 7 ? 5 : number + 1}z`;
+  }
+
+  function opponentStates(entry, gameInfo) {
+    const info = gameInfo?.game_info || {};
+    const doraTiles = (info.dora_indicators || []).map(indicatorDora).filter(Boolean);
+    const roundWind = modernRoundWind(gameInfo);
+    const riichi = info.riichi || [];
+    return (info.other_hands || []).map((hand, index) => {
+      const playerId = Number(hand?.player_id ?? index + 1);
+      const openSets = hand?.open_sets || [];
+      const openTiles = openSets.flatMap(modernOpenSetTiles);
+      const seatWind = `${playerId + 1}z`;
+      const exposedDoraCount = doraTiles.reduce((sum, dora) =>
+        sum + openTiles.filter((tile) => normalizeForMeld(tile) === normalizeForMeld(dora)).length, 0);
+      const yakuhaiHan = openSets.reduce((sum, meld) => {
+        const tiles = modernOpenSetTiles(meld).map(normalizeForMeld);
+        if (tiles.length < 3 || new Set(tiles).size !== 1) return sum;
+        const tile = tiles[0];
+        return sum + (["5z", "6z", "7z", seatWind, roundWind].includes(tile) ? 1 : 0);
+      }, 0);
+      const declared = riichi.find((item) => Number(item?.player_id ?? -1) === playerId);
+      const isRiichi = Boolean(declared?.declared || declared?.accepted);
+      return {
+        playerId,
+        dealer: playerId === 0,
+        seatWind,
+        mode: isRiichi ? "riichi" : openSets.length ? "open" : "dama",
+        openMeldCount: openSets.length,
+        openTiles,
+        exposedDoraCount,
+        confirmedHan: yakuhaiHan + exposedDoraCount,
+        genbutsu: (entry?.sl_genbutsu?.[index] || []).map((tile) =>
+          MORTAL_INDEX_TILES[Number(tile)] || normalizeTile(tile)).filter(Boolean)
+      };
+    });
+  }
+
+  function riverTilesFromGameInfo(gameInfo) {
+    return (gameInfo?.game_info?.rivers || []).flatMap((river) =>
+      (river || []).flatMap((item) => {
+        const raw = item?.sutehai?.tile ?? item?.tile ?? item;
+        const tile = normalizeTile(raw);
+        return tile ? [tile] : [];
+      }));
+  }
+
+  function decisionScene(item) {
+    const entry = item.entry;
+    const gameInfo = item.gameInfo || parseGameInfo(entry);
+    const info = gameInfo?.game_info || {};
+    const selfFuuros = [...(entry?.state?.fuuros || [])];
+    const selfCallTiles = selfFuuros.flatMap(modernMeldTileCodes);
+    const opponentCallTiles = (info.other_hands || []).flatMap((hand) =>
+      (hand.open_sets || []).flatMap(modernOpenSetTiles));
+    const handTiles = [...(entry?.state?.tehai || [])].map(normalizeTile).filter(Boolean);
+    return {
+      title: "Mahjong Review",
+      handTiles,
+      drawTile: entry?.tile ? normalizeTile(entry.tile) : null,
+      riverTiles: riverTilesFromGameInfo(gameInfo),
+      callTiles: [...selfCallTiles, ...opponentCallTiles],
+      opponentCallTiles,
+      selfCallTiles,
+      selfMelds: buildModernMelds(selfFuuros),
+      doraTiles: (info.dora_indicators || []).map(normalizeTile).filter(Boolean),
+      roundText: item.roundText || modernRoundLabel(gameInfo),
+      honba: Number(info.round?.honba ?? item.honba ?? 0),
+      seatText: modernSeatLabel(gameInfo),
+      actorText: modernSeatLabel(gameInfo),
+      roundWind: modernRoundWind(gameInfo),
+      seatWind: modernSeatWind(gameInfo),
+      tilesLeftText: String(info.tiles_left ?? entry?.tiles_left ?? ""),
+      currentTurn: Number(entry?.junme || item.turn || 1),
+      scores: (info.scores || []).map(Number),
+      actualDiscard: actionLabel(entry?.actual),
+      recommendedDiscard: actionLabel(entry?.expected),
+      candidates: candidateRows(entry),
+      judgmentType: judgmentType(entry),
+      handsBySeat: [handTiles, [], [], []],
+      shanten: entry?.shanten ?? null,
+      atSelfRiichi: Boolean(entry?.at_self_riichi),
+      ownRiichiMoment: entry?.actual?.type === "reach" || entry?.expected?.type === "reach",
+      opponentRiichi: opponentRiichiFromGameInfo(gameInfo),
+      opponents: opponentStates(entry, gameInfo),
+      decisionActions: {
+        actual: normalizedAction(entry?.actual),
+        recommended: normalizedAction(entry?.expected),
+        details: (entry?.details || []).map((detail) => normalizedAction(detail.action)).filter(Boolean)
+      },
+      sourcePosition: {
+        kyokuIndex: item.kyokuIndex,
+        entryIndex: item.entryIndex,
+        mismatchOrdinal: item.mismatchOrdinal,
+        handCounter: item.handCounter,
+        plyCounter: item.plyCounter
+      },
+      diagnostics: { batch: true, modern: isModernReviewPage() }
+    };
+  }
+
+  async function listDecisionScenes() {
+    return (await reviewedEntries()).map(decisionScene);
   }
 
   function judgmentType(entry) {
@@ -743,7 +877,13 @@
         shanten: entry?.shanten ?? null,
         atSelfRiichi: Boolean(entry?.at_self_riichi),
         ownRiichiMoment: entry?.actual?.type === "reach",
-        opponentRiichi: Boolean(gameInfo?.game_info?.riichi?.some((item, index) => index !== 0 && (item?.declared || item?.accepted))),
+      opponentRiichi: Boolean(gameInfo?.game_info?.riichi?.some((item, index) => index !== 0 && (item?.declared || item?.accepted))),
+      opponents: opponentStates(entry, gameInfo),
+      decisionActions: {
+        actual: normalizedAction(entry?.actual),
+        recommended: normalizedAction(entry?.expected),
+        details: (entry?.details || []).map((detail) => normalizedAction(detail.action)).filter(Boolean)
+      },
         sourcePosition: current ? {
           kyokuIndex: current.kyokuIndex,
           entryIndex: current.entryIndex,
@@ -802,6 +942,12 @@
       atSelfRiichi: Boolean(entry?.at_self_riichi),
       ownRiichiMoment: entry?.actual?.type === "reach",
       opponentRiichi: current ? opponentRiichiAt(page.defaultView.MM.GS, current.handCounter, current.plyCounter) : false,
+      opponents: opponentStates(entry, parseGameInfo(entry)),
+      decisionActions: {
+        actual: normalizedAction(entry?.actual),
+        recommended: normalizedAction(entry?.expected),
+        details: (entry?.details || []).map((detail) => normalizedAction(detail.action)).filter(Boolean)
+      },
       sourcePosition: current ? {
         kyokuIndex: current.kyokuIndex,
         entryIndex: current.entryIndex,
@@ -1658,6 +1804,7 @@
     navigate,
     listMistakes,
     listDecisions,
+    listDecisionScenes,
     listFirstDiscards,
     goToMismatch,
     goToPosition,

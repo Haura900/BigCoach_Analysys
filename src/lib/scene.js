@@ -101,6 +101,8 @@ function normalizeScene(raw, url) {
     actualDiscard,
     recommendedDiscard,
     candidates,
+    opponents: Array.isArray(raw.opponents) ? raw.opponents : [],
+    decisionActions: raw.decisionActions || null,
     dealInRisk: raw.dealInRisk || { opponents: [], combined: [] },
     aiSummary: raw.aiSummary || "",
     judgmentType: raw.judgmentType || "discard",
@@ -121,6 +123,13 @@ function normalizeCandidates(candidates) {
       tile: item.tile || null,
       value: item.value != null && Number.isFinite(Number(item.value)) ? Number(item.value) : null,
       qValue: item.qValue != null && Number.isFinite(Number(item.qValue)) ? Number(item.qValue) : null,
+      dealInRate: item.dealInRate != null && Number.isFinite(Number(item.dealInRate))
+        ? Math.max(0, Math.min(1, Number(item.dealInRate)))
+        : 0,
+      dealInByOpponent: Array.isArray(item.dealInByOpponent)
+        ? item.dealInByOpponent.map((value) => Math.max(0, Math.min(1, Number(value || 0))))
+        : [],
+      action: item.action || null,
       label: item.label || "",
       raw: item.raw || ""
     }))

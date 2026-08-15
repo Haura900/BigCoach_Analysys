@@ -5,6 +5,7 @@ const net = require("node:net");
 const path = require("node:path");
 const fs = require("node:fs");
 const { codesToIndices, windToIndex, removeKnownTiles, wallCounts } = require("./tiles");
+const { buildDefensiveEngineInput } = require("./ev-model");
 const ENGINE_LOCK = require("../../engine-lock.json");
 
 const ENGINE_VERSION = ENGINE_LOCK.version;
@@ -97,6 +98,7 @@ class SimulatorService {
     this.log = log;
     this.port = 50000;
     this.process = null;
+    this.supportsSituationalEv = null;
   }
 
   get directory() {
@@ -195,6 +197,9 @@ class SimulatorService {
     if (Number.isInteger(scene.remainingTiles)) {
       payload.remaining_tiles = clamp(scene.remainingTiles, 0, 70);
     }
+    if (settings.enableSituationalEv) {
+      Object.assign(payload, buildDefensiveEngineInput(scene, settings.evHyperparameters));
+    }
     payload.other_win_hazard[17] = payload.other_win_hazard[16];
     if (withWall) {
       const known = [
@@ -205,6 +210,20 @@ class SimulatorService {
       ];
       payload.wall = wallCounts(removeKnownTiles(known));
     }
+    return payload;
+  }
+
+  buildLegacySituationalPayload(scene, settings, withWall) {
+    const payload = this.buildPayload(scene, { ...settings, enableSituationalEv: false }, withWall);
+    const defensive = buildDefensiveEngineInput(scene, settings.evHyperparameters);
+    const h = defensive.hazard_multipliers;
+    let multiplier = defensive.opponent_riichi_count >= 2
+      ? h.opponent_double_riichi
+      : defensive.opponent_riichi_count === 1 ? h.opponent_riichi : 1;
+    multiplier *= h.opponent_two_meld ** defensive.opponent_two_meld_count;
+    if (defensive.self_riichi) multiplier *= h.self_riichi;
+    payload.other_win_hazard = payload.other_win_hazard.map((value) => clamp(value * multiplier, 0, 1));
+    payload.other_win_hazard[17] = payload.other_win_hazard[16];
     return payload;
   }
 
@@ -230,7 +249,7 @@ class SimulatorService {
     }
   }
 
-  parse(data, scene) {
+  parse(data, scene, settings = {}) {
     const response = data.response || data || {};
     const shanten = response.shanten || {};
     const turn = Number.isInteger(scene.remainingTiles)
@@ -238,7 +257,9 @@ class SimulatorService {
       : clamp(scene.currentTurn || 1, 1, 18);
     const candidates = (response.stats || []).flatMap((stat) => {
       try {
-        const tile = require("./tiles").normalizeTileCode(stat.tile);
+        const tile = Number(stat.tile) === -1
+          ? null
+          : require("./tiles").normalizeTileCode(stat.tile);
         const ukeire = (stat.necessary_tiles || []).flatMap((item) => {
           try {
             return [{ tile: require("./tiles").normalizeTileCode(item.tile), count: Number(item.count || 0) }];
@@ -282,6 +303,23 @@ class SimulatorService {
             .sort((a, b) => b.probability - a.probability)
           : [];
         const expectedScore = at(stat.exp_score);
+        const hasEngineEvBreakdown = Array.isArray(stat.total_ev);
+        const localDefensive = settings.enableSituationalEv && !hasEngineEvBreakdown
+          ? buildDefensiveEngineInput(scene, settings.evHyperparameters)
+          : null;
+        const statTile = Number(stat.tile);
+        const localDealInEv = localDefensive && statTile >= 0 && statTile < 37
+          ? -localDefensive.deal_in_probability[statTile] * localDefensive.deal_in_value[statTile]
+          : 0;
+        const localTenpaiEv = localDefensive
+          ? clamp(at(stat.tenpai_prob) - at(stat.win_prob), 0, 1) * localDefensive.tenpai_payment
+          : 0;
+        const hasEvBreakdown = hasEngineEvBreakdown || Boolean(localDefensive);
+        const winEv = hasEvBreakdown ? at(stat.win_ev) : expectedScore;
+        const resolvedWinEv = hasEngineEvBreakdown ? winEv : expectedScore;
+        const dealInEv = hasEngineEvBreakdown ? at(stat.deal_in_ev) : localDealInEv;
+        const tenpaiEv = hasEngineEvBreakdown ? at(stat.tenpai_ev) : localTenpaiEv;
+        const totalEv = hasEngineEvBreakdown ? at(stat.total_ev) : resolvedWinEv + dealInEv + tenpaiEv;
         const shapleyTotal = yakuContributions.reduce((sum, entry) => sum + entry.shapley, 0);
         return [{
           tile,
@@ -289,6 +327,11 @@ class SimulatorService {
           ukeire,
           ukeireTotal: ukeire.reduce((sum, item) => sum + item.count, 0),
           expectedScore,
+          winEv: resolvedWinEv,
+          dealInEv,
+          tenpaiEv,
+          totalEv,
+          hasEvBreakdown,
           winProbability: at(stat.win_prob),
           tenpaiProbability: at(stat.tenpai_prob),
           callProbability,
@@ -303,7 +346,7 @@ class SimulatorService {
       } catch {
         return [];
       }
-    }).sort((a, b) => b.expectedScore - a.expectedScore);
+    }).sort((a, b) => b.totalEv - a.totalEv);
     return {
       config: response.config || {},
       shanten,
@@ -317,13 +360,43 @@ class SimulatorService {
     await this.ensureStarted();
     const timeoutMs = Math.max(3000, Number(settings.simulatorTimeoutSec || 30) * 1000);
     const [withWallRaw, withoutWallRaw] = await Promise.all([
-      this.request(this.buildPayload(scene, settings, true), timeoutMs),
-      this.request(this.buildPayload(scene, settings, false), timeoutMs)
+      this.requestWithCompatibility(scene, settings, true, timeoutMs),
+      this.requestWithCompatibility(scene, settings, false, timeoutMs)
     ]);
     return {
-      withWall: this.parse(withWallRaw, scene),
-      withoutWall: this.parse(withoutWallRaw, scene)
+      withWall: this.parse(withWallRaw, scene, settings),
+      withoutWall: this.parse(withoutWallRaw, scene, settings)
     };
+  }
+
+  async requestWithCompatibility(scene, settings, withWall, timeoutMs) {
+    if (!settings.enableSituationalEv || this.supportsSituationalEv !== false) {
+      try {
+        const result = await this.request(this.buildPayload(scene, settings, withWall), timeoutMs);
+        if (settings.enableSituationalEv) {
+          const response = result.response || result;
+          const supported = (response.stats || []).some((stat) => Array.isArray(stat.total_ev));
+          if (!supported) throw new Error("engine response does not include the requested EV breakdown");
+          this.supportsSituationalEv = true;
+        }
+        return result;
+      } catch (error) {
+        if (!settings.enableSituationalEv) throw error;
+        this.supportsSituationalEv = false;
+        this.log(`situational EV engine extension unavailable; using compatible local breakdown: ${error.message || error}`);
+      }
+    }
+    return this.request(this.buildLegacySituationalPayload(scene, settings, withWall), timeoutMs);
+  }
+
+  async analyzeOne(scene, settings, withWall = true) {
+    await this.ensureStarted();
+    const timeoutMs = Math.max(3000, Number(settings.simulatorTimeoutSec || 30) * 1000);
+    return this.parse(
+      await this.requestWithCompatibility(scene, settings, withWall, timeoutMs),
+      scene,
+      settings
+    );
   }
 
   stop() {

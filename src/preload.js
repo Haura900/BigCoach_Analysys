@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("bigcoachApp", {
   stockFirstDiscards: () => ipcRenderer.invoke("bigcoach:stock-first-discards"),
   calculateHandScore: () => ipcRenderer.invoke("bigcoach:hand-score"),
   runSimulation: () => ipcRenderer.invoke("simulator:run"),
+  runEvAnalysis: (thresholdPercent) => ipcRenderer.invoke("analysis:ev-run", thresholdPercent),
+  jumpToEvAnalysis: (index) => ipcRenderer.invoke("analysis:ev-jump", index),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   captureCardPreview: (payload) => ipcRenderer.invoke("anki:capture-preview", payload),
   finishCardPreview: (payload) => ipcRenderer.invoke("anki:finish-preview", payload),
