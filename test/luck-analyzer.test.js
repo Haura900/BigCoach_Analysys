@@ -55,6 +55,7 @@ test("BigCoach実例から8指標と理論ツモを抽出できる", () => {
   assert.ok(Array.isArray(summary.fairness.groups));
   assert.ok(Array.isArray(summary.fairness.diagnostics));
   assert.deepEqual(summary.fairness.groups.map((item) => item.key), ["theory", "bigcoach", "all"]);
+  assert.equal(summary.fairness.groups.find((item) => item.key === "all").pValue, null);
   assert.equal(summary.overall.totalComponents, 8);
 });
 
