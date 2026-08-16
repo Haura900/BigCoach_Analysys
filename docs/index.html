@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0f1917">
-  <meta name="description" content="BigCoachの解析JSONから、配牌・リーチ後和了・放銃・打点の運を端末内だけで評価します。">
+  <meta name="description" content="BigCoachの解析JSONから、技術に依存しにくい8つの運量と牌山の偏りを端末内だけで検証します。">
   <title>BigCoach Luck Analyzer</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
@@ -21,13 +21,13 @@
   <main>
     <section class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">TIER 1 · MODEL FREE</p>
-        <h1>牌譜から、<br><em>運だけ</em>を切り分ける。</h1>
-        <p class="hero-lead">BigCoachの予測確率と実績を照合。技術評価とは混ぜず、偶然の上振れ・下振れを4つの指標で可視化します。</p>
+        <p class="eyebrow">EMPIRICAL · SEQUENTIAL · LOCAL</p>
+        <h1>牌譜から、<br><em>運の偏り</em>を測る。</h1>
+        <p class="hero-lead">BigCoachを「正解」とは置きません。配牌は経験分布、ツモは残り牌からの逐次理論値で評価し、総合指数と検定結果を分けて表示します。</p>
         <div class="hero-stats">
           <div><strong id="hero-records">0</strong><span>保存牌譜</span></div>
           <div><strong id="hero-rounds">0</strong><span>解析局</span></div>
-          <div><strong id="hero-pool">0</strong><span>配牌分布</span></div>
+          <div><strong id="hero-pool">0</strong><span>理論計算局</span></div>
         </div>
       </div>
 
@@ -74,10 +74,10 @@
         </div>
         <div class="bookmarklet-box history-bookmarklet-box">
           <div>
-            <strong>履歴一覧からまとめて取得</strong>
-            <span>このボタンも登録し、BigCoachの /account/history 上で実行</span>
+            <strong>はうらCの未取得実戦だけを保存</strong>
+            <span>BigCoachの実戦履歴から、前回までに保存していない解析JSONだけを差分取得</span>
           </div>
-          <a id="history-bookmarklet" class="bookmarklet" href="#">Luck履歴を一括保存</a>
+          <a id="history-bookmarklet" class="bookmarklet" href="#">はうらCの未取得実戦を保存</a>
         </div>
         <button id="demo-button" class="text-button">まずデモデータで試す →</button>
       </section>
@@ -98,14 +98,14 @@
       <div id="empty-state" class="empty-state">
         <span>◌</span>
         <h3>まだ解析データがありません</h3>
-        <p>上の取り込み欄からJSONを追加すると、4つの運指標がここに表示されます。</p>
+        <p>上の取り込み欄からJSONを追加すると、8つの運量と独立性検定がここに表示されます。</p>
       </div>
 
       <div id="metrics" class="metrics" hidden>
         <article class="overall-card">
           <div>
             <p class="eyebrow">OVERALL LUCK</p>
-            <h3>総合運</h3>
+            <h3>総合運指数</h3>
             <p id="overall-label" class="overall-label">—</p>
           </div>
           <div class="overall-score">
@@ -118,37 +118,97 @@
         </article>
 
         <article class="metric-card metric-deal">
-          <div class="metric-head"><span>01</span><h3>配牌運</h3><i>経験分布</i></div>
+          <div class="metric-head"><span>01</span><h3>配牌時和了率</h3><i>経験分布</i></div>
           <div class="metric-value"><strong id="deal-percentile">—</strong><small>percentile</small></div>
           <div class="meter"><span id="deal-meter"></span></div>
           <p id="deal-detail" class="metric-detail"></p>
-          <p class="metric-note">初回意思決定時の和了確率を、端末内に蓄積した局分布と比較。</p>
+          <p class="metric-note">初回意思決定時の和了予測値そのものを経験分布で順位化。実際に和了したかは使いません。</p>
         </article>
 
-        <article class="metric-card metric-riichi">
-          <div class="metric-head"><span>02</span><h3>リーチ後和了運</h3><i>確率差</i></div>
-          <div class="metric-value"><strong id="riichi-z">—</strong><small>σ</small></div>
-          <div class="sigma-line"><span></span><b id="riichi-marker"></b></div>
-          <p id="riichi-detail" class="metric-detail"></p>
-          <p class="metric-note">Σ(Y−p) / √Σp(1−p)。プラスほど期待以上の和了。</p>
+        <article class="metric-card metric-rank">
+          <div class="metric-head"><span>02</span><h3>配牌時平着変動</h3><i>経験分布</i></div>
+          <div class="metric-value"><strong id="rank-percentile">—</strong><small>percentile</small></div>
+          <div class="meter"><span id="rank-meter"></span></div>
+          <p id="rank-detail" class="metric-detail"></p>
+          <p class="metric-note">配牌直後の順位確率から求めた期待順位と、配牌前の現在順位との差。プラスほど有利な配牌。</p>
         </article>
 
-        <article class="metric-card metric-dealin">
-          <div class="metric-head"><span>03</span><h3>放銃運</h3><i>確率差</i></div>
-          <div class="metric-value"><strong id="dealin-z">—</strong><small>σ</small></div>
-          <div class="sigma-line"><span></span><b id="dealin-marker"></b></div>
-          <p id="dealin-detail" class="metric-detail"></p>
-          <p class="metric-note">内部計算は同じ式。表示は符号を反転し、プラスほど放銃が少なく幸運。</p>
+        <article class="metric-card metric-defense">
+          <div class="metric-head"><span>03</span><h3>放銃予実幅</h3><i>経験分布</i></div>
+          <div class="metric-value"><strong id="defense-percentile">—</strong><small>percentile</small></div>
+          <div class="meter"><span id="defense-meter"></span></div>
+          <p id="defense-detail" class="metric-detail"></p>
+          <p class="metric-note">被リーチ・被2副露時だけを対象に、予測放銃率−実績を局単位で経験分布と比較。</p>
         </article>
 
-        <article class="metric-card metric-points">
-          <div class="metric-head"><span>04</span><h3>打点運</h3><i id="points-support">期待差</i></div>
-          <div class="metric-value"><strong id="points-diff">—</strong><small>点</small></div>
-          <p id="points-detail" class="metric-detail"></p>
-          <div id="feature-support" class="feature-support"></div>
-          <p class="metric-note">和了時の期待打点と実績差。取得不能項目は未対応と明記。</p>
+        <article class="metric-card metric-dora">
+          <div class="metric-head"><span>04</span><h3>ドラツモ率</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="dora-percentile">—</strong><small>luck index</small></div>
+          <div class="sigma-line"><span></span><b id="dora-marker"></b></div>
+          <p id="dora-detail" class="metric-detail"></p>
+          <p class="metric-note">全員の初期手牌と既出牌を除いた残り牌から毎ツモ再計算。赤ドラも含みます。</p>
+        </article>
+
+        <article class="metric-card metric-effective">
+          <div class="metric-head"><span>05</span><h3>有効牌ツモ率</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="effective-percentile">—</strong><small>luck index</small></div>
+          <div class="sigma-line"><span></span><b id="effective-marker"></b></div>
+          <p id="effective-detail" class="metric-detail"></p>
+          <p class="metric-note">通常形・七対子・国士を含む向聴数が小さくなる牌を、各自摸直前の手牌から再計算。</p>
+        </article>
+
+        <article class="metric-card metric-riichi-win">
+          <div class="metric-head"><span>06</span><h3>リーチ時自明和了率</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="riichi-win-percentile">—</strong><small>luck index</small></div>
+          <div class="sigma-line"><span></span><b id="riichi-win-marker"></b></div>
+          <p id="riichi-win-detail" class="metric-detail"></p>
+          <p class="metric-note">自分のツモと、双方リーチ時の相手ツモ切りについて、残り和了牌数から計算。</p>
+        </article>
+
+        <article class="metric-card metric-riichi-danger">
+          <div class="metric-head"><span>07</span><h3>リーチ時危険牌率</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="riichi-danger-percentile">—</strong><small>luck index</small></div>
+          <div class="sigma-line"><span></span><b id="riichi-danger-marker"></b></div>
+          <p id="riichi-danger-detail" class="metric-detail"></p>
+          <p class="metric-note">自分がリーチ中、完全情報でテンパイ形の相手の待ちをつかむ率。自分の和了牌は競合事象として除外。</p>
+        </article>
+
+        <article class="metric-card metric-genbutsu">
+          <div class="metric-head"><span>08</span><h3>被リーチ時現物掴み率</h3><i>逐次理論値</i></div>
+          <div class="metric-value"><strong id="genbutsu-percentile">—</strong><small>luck index</small></div>
+          <div class="sigma-line"><span></span><b id="genbutsu-marker"></b></div>
+          <p id="genbutsu-detail" class="metric-detail"></p>
+          <p class="metric-note">相手リーチ成立後の自分のツモが現物かを評価。複数リーチ時は全リーチ者に共通する現物だけを数えます。</p>
         </article>
       </div>
+    </section>
+
+    <section id="fairness" class="fairness section-shell" aria-labelledby="fairness-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">FAIRNESS CHECK</p>
+          <h2 id="fairness-title">独立性・適合度検定</h2>
+        </div>
+        <span id="fairness-verdict" class="verdict">データ待ち</span>
+      </div>
+      <p class="fairness-lead">各ツモを独立なコイン投げとは扱わず、逐次残差または半荘内の置換で検定します。理論値系・BigCoach依存系・全指標の3通りをCauchy法で統合し、主検定をHolm法で補正します。</p>
+      <h3 class="fairness-subtitle">主検定：3系統</h3>
+      <div class="fairness-table-wrap">
+        <table class="fairness-table">
+          <thead><tr><th>検定</th><th>方法</th><th>n</th><th>生p</th><th>補正p</th><th>判定</th></tr></thead>
+          <tbody id="fairness-group-body"></tbody>
+        </table>
+      </div>
+      <details class="fairness-diagnostics">
+        <summary>個別診断を表示</summary>
+        <div class="fairness-table-wrap">
+          <table class="fairness-table">
+            <thead><tr><th>検定</th><th>方法</th><th>n</th><th>生p</th><th>補正p</th><th>判定</th></tr></thead>
+            <tbody id="fairness-body"></tbody>
+          </table>
+        </div>
+      </details>
+      <p class="fairness-note">p値は「牌操作の確率」ではありません。低い値は帰無モデルと合いにくいという警報であり、仕様差・選択バイアス・多重探索の確認が先です。</p>
     </section>
 
     <section class="history section-shell" aria-labelledby="history-title">
@@ -165,19 +225,19 @@
     <section class="method section-shell">
       <div>
         <p class="eyebrow">HOW IT WORKS</p>
-        <h2>評価方法</h2>
+        <h2>評価と検定を分離</h2>
       </div>
       <div class="method-grid">
-        <article><span>p</span><h3>AIの予測</h3><p>BigCoach JSONに含まれる和了確率・放銃率・期待打点だけを使用します。</p></article>
-        <article><span>Y</span><h3>実際の結果</h3><p>和了・放銃なら1、そうでなければ0。打ち方の良し悪しとは分離します。</p></article>
-        <article><span>σ</span><h3>偶然の偏り</h3><p>予測との差を分散で標準化。|2σ|を超えるほど珍しい偏りです。</p></article>
+        <article><span>E</span><h3>経験分布</h3><p>BigCoachの予測値は真値にせず、同じ端末に蓄積した局の中で順位化します。</p></article>
+        <article><span>M</span><h3>逐次確率</h3><p>ツモごとに残り牌を更新するマルチンゲール残差で、復元なし抽出を扱います。</p></article>
+        <article><span>H</span><h3>3系統の主検定</h3><p>理論値系・BigCoach依存系・全指標を分け、Cauchy結合とHolm補正後のp値を主判定に使います。</p></article>
       </div>
     </section>
   </main>
 
   <footer>
     <span>BigCoach Luck Analyzer</span>
-    <p>完全静的・通信不要。保存先はブラウザのlocalStorageです。</p>
+    <p>完全静的・保存先はブラウザのlocalStorage。牌山の未配牌部分と王牌はJSON上で分離できないため、両者を含む条件付き残り牌を母集団にします。</p>
     <a href="https://github.com/Haura900/BigCoach_Analysys">GitHub ↗</a>
   </footer>
 
@@ -193,6 +253,7 @@
     </article>
   </template>
 
+  <script src="./mahjong.js"></script>
   <script src="./analyzer.js"></script>
   <script src="./app.js"></script>
 </body>
