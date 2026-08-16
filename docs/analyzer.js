@@ -694,10 +694,13 @@
     ];
     const theoryP = cauchyCombine(theoryDiagnostics.map((test) => test.pValue));
     const bigCoachP = cauchyCombine(bigCoachDiagnostics.map((test) => test.pValue));
+    const allP = Number.isFinite(theoryP) && Number.isFinite(bigCoachP)
+      ? cauchyCombine([theoryP, bigCoachP])
+      : null;
     const groupTests = holmAdjust([
       { key: "theory", label: "理論値系 総合検定", pValue: theoryP, n: theoryDiagnostics.filter((test) => Number.isFinite(test.pValue)).length, method: "Cauchy結合 + Holm補正" },
       { key: "bigcoach", label: "BigCoach依存系 総合検定", pValue: bigCoachP, n: bigCoachDiagnostics.filter((test) => Number.isFinite(test.pValue)).length, method: "Cauchy結合 + Holm補正" },
-      { key: "all", label: "全指標 統合検定", pValue: cauchyCombine([theoryP, bigCoachP]), n: [theoryP, bigCoachP].filter(Number.isFinite).length, method: "2系統Cauchy結合 + Holm補正" }
+      { key: "all", label: "全指標 統合検定", pValue: allP, n: [theoryP, bigCoachP].filter(Number.isFinite).length, method: "2系統Cauchy結合 + Holm補正" }
     ]);
     const diagnostics = holmAdjust([...theoryDiagnostics, ...bigCoachDiagnostics]);
 
