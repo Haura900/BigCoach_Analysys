@@ -10,6 +10,15 @@ const { AuthSessionStore } = require("./lib/auth-session");
 const { tileFilename } = require("./lib/tiles");
 const { DEFAULT_HAND_SCORE_SETTINGS, SCORE_SETTING_KEYS, calculateHandScore } = require("./lib/hand-score");
 const {
+  DEFAULT_EV_HYPERPARAMETERS,
+  mergeHyperparameters,
+  applyDamaWinBonus,
+  callFutureRiskEv,
+  sceneForCallAction,
+  isOpponentGenbutsuWait,
+  isEvReviewCandidate
+} = require("./lib/ev-model");
+const {
   classifyShinMistake,
   classifyMajorMistake,
   listShinMistakes,
@@ -32,7 +41,7 @@ const DEFAULT_OTHER_WIN_HAZARD_PERCENT = [
 ];
 
 const DEFAULT_SETTINGS = {
-  settingsVersion: 8,
+  settingsVersion: 10,
   deckName: "BigCoach",
   riskReadingDeckName: "BigCoach::RiskReading",
   riskReadingNote: "相手の河から放銃危険度を読む。",
@@ -48,7 +57,10 @@ const DEFAULT_SETTINGS = {
   enableRiichi: true,
   enableCalls: false,
   enableOtherWinStop: true,
+  enableSituationalEv: true,
   otherWinHazardPercent: DEFAULT_OTHER_WIN_HAZARD_PERCENT,
+  evAnalysisRecommendationThresholdPercent: 0.1,
+  evHyperparameters: DEFAULT_EV_HYPERPARAMETERS,
   tsumoWinSharePercent: 100,
   simulatorTimeoutSec: 30,
   shinMistakeThreshold: 0.001,
@@ -61,6 +73,7 @@ let bigCoachView;
 let settings;
 let currentScene;
 let currentSimulation;
+let currentEvAnalysis = [];
 let currentMajorMistakes = [];
 let currentDecisions = [];
 let currentCardImages;
@@ -215,8 +228,16 @@ function loadSettings() {
     }
     delete saved.enableProbabilityPruning;
     delete saved.probabilityPruneThresholdPercent;
-    saved.settingsVersion = 8;
-    return { ...DEFAULT_SETTINGS, ...saved };
+    // Existing installations predate the EV switch. Treat a missing value as
+    // enabled so BigCoach's candidate deal-in probabilities are not silently
+    // displayed as zero; an explicitly saved false still preserves legacy EV.
+    if (!Object.hasOwn(saved, "enableSituationalEv")) saved.enableSituationalEv = true;
+    saved.settingsVersion = 10;
+    return {
+      ...DEFAULT_SETTINGS,
+      ...saved,
+      evHyperparameters: mergeHyperparameters(saved.evHyperparameters)
+    };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -241,6 +262,15 @@ function saveSettings(next) {
       )
     );
     normalized.otherWinHazardPercent[17] = normalized.otherWinHazardPercent[16];
+  }
+  if ("evAnalysisRecommendationThresholdPercent" in normalized) {
+    normalized.evAnalysisRecommendationThresholdPercent = Math.min(
+      100,
+      Math.max(0, Number(normalized.evAnalysisRecommendationThresholdPercent))
+    );
+  }
+  if (normalized.evHyperparameters) {
+    normalized.evHyperparameters = mergeHyperparameters(normalized.evHyperparameters);
   }
   settings = {
     ...settings,
@@ -378,7 +408,7 @@ async function ensureAdapter() {
   if (!bigCoachView || bigCoachView.webContents.isDestroyed()) throw new Error("BigCoach display is not available.");
   const frame = await waitForAnalysisFrame();
   const exists = await frame.executeJavaScript(
-    "Boolean(window.__bigcoachDesktop && window.__bigcoachDesktop.__version === '2026-07-06-first-discard-stock-winds' && typeof window.__bigcoachDesktop.listFirstDiscards === 'function')",
+    "Boolean(window.__bigcoachDesktop && window.__bigcoachDesktop.__version === '2026-07-06-first-discard-stock-winds' && typeof window.__bigcoachDesktop.listFirstDiscards === 'function' && typeof window.__bigcoachDesktop.listDecisionScenes === 'function')",
     true
   );
   if (!exists) await frame.executeJavaScript(adapterSource, true);
@@ -568,6 +598,126 @@ async function analyzeScene(scene) {
     };
   }
   return simulator.analyze(scene, settings);
+}
+
+function sameTile(left, right) {
+  if (!left || !right) return false;
+  const normalize = (tile) => String(tile).replace(/^0([mps])$/, "5$1");
+  return normalize(left) === normalize(right);
+}
+
+function candidateForTile(analysis, tile) {
+  return analysis?.candidates?.find((candidate) => sameTile(candidate.tile, tile)) || null;
+}
+
+function actionLabel(action) {
+  if (!action) return "不明";
+  if (action.type === "none") return "副露しない";
+  if (action.type === "reach") return "リーチ";
+  if (["chi", "pon", "ankan", "daiminkan", "kakan"].includes(action.type)) {
+    return `${action.type.toUpperCase()} ${action.pai || ""}`.trim();
+  }
+  return action.pai || action.type || "不明";
+}
+
+async function analyzeDiscardDecisionEv(scene) {
+  const analysis = await simulator.analyzeOne(scene, settings, true);
+  const recommended = candidateForTile(analysis, scene.recommendedDiscard);
+  const actual = candidateForTile(analysis, scene.actualDiscard);
+  if (!recommended || !actual) throw new Error("実打またはAI推奨打牌をシミュレーター候補から取得できません。");
+  return { recommended, actual, recommendedLabel: scene.recommendedDiscard, actualLabel: scene.actualDiscard };
+}
+
+async function analyzeRiichiDecisionEv(scene) {
+  const riichi = await simulator.analyzeOne(scene, { ...settings, enableRiichi: true }, true);
+  const damaRaw = await simulator.analyzeOne(scene, { ...settings, enableRiichi: false }, true);
+  const damaCandidates = damaRaw.candidates.map((candidate) =>
+    applyDamaWinBonus(candidate, isOpponentGenbutsuWait(candidate, scene), settings.evHyperparameters));
+  damaCandidates.sort((left, right) => right.totalEv - left.totalEv);
+  const riichiBest = riichi.candidates[0];
+  const damaBest = damaCandidates[0];
+  if (!riichiBest || !damaBest) throw new Error("リーチ・ダマ比較の候補を取得できません。");
+  const choose = (action) => {
+    const candidates = action?.type === "reach" ? riichi.candidates : damaCandidates;
+    return candidates.find((candidate) => sameTile(candidate.tile, action?.pai)) || candidates[0];
+  };
+  const actualAction = scene.decisionActions?.actual;
+  const recommendedAction = scene.decisionActions?.recommended;
+  return {
+    recommended: choose(recommendedAction),
+    actual: choose(actualAction),
+    recommendedLabel: actionLabel(recommendedAction),
+    actualLabel: actionLabel(actualAction)
+  };
+}
+
+async function analyzeCallDecisionEv(scene) {
+  const evaluate = async (action) => {
+    const open = action?.type !== "none";
+    const variant = sceneForCallAction(scene, action);
+    const analysis = await simulator.analyzeOne(variant, {
+      ...settings,
+      enableCalls: false,
+      enableSituationalEv: settings.enableSituationalEv
+    }, true);
+    const candidate = analysis.candidates[0];
+    if (!candidate) throw new Error(`${actionLabel(action)}の副露比較候補を取得できません。`);
+    const futureRiskEv = callFutureRiskEv(scene, open, settings.evHyperparameters);
+    return { ...candidate, dealInEv: Number(candidate.dealInEv || 0) + futureRiskEv,
+      totalEv: Number(candidate.totalEv || 0) + futureRiskEv, futureRiskEv };
+  };
+  const actualAction = scene.decisionActions?.actual;
+  const recommendedAction = scene.decisionActions?.recommended;
+  return {
+    recommended: await evaluate(recommendedAction),
+    actual: await evaluate(actualAction),
+    recommendedLabel: actionLabel(recommendedAction),
+    actualLabel: actionLabel(actualAction)
+  };
+}
+
+async function runEvReviewAnalysis(thresholdPercent) {
+  await ensureAdapter();
+  const rawScenes = await executeAdapter("window.__bigcoachDesktop.listDecisionScenes()");
+  const threshold = Math.max(0, Math.min(1, Number(thresholdPercent) / 100));
+  const url = bigCoachView.webContents.getURL();
+  const scenes = rawScenes.map((raw) => validateScene(normalizeScene(raw, url)))
+    .filter((scene) => isEvReviewCandidate(scene, threshold));
+  const results = [];
+  for (const scene of scenes) {
+    try {
+      const comparison = scene.judgmentType === "call"
+        ? await analyzeCallDecisionEv(scene)
+        : scene.judgmentType === "riichi"
+          ? await analyzeRiichiDecisionEv(scene)
+          : await analyzeDiscardDecisionEv(scene);
+      const gap = Number(comparison.recommended.totalEv) - Number(comparison.actual.totalEv);
+      results.push({
+        sceneId: scene.sceneId,
+        roundText: scene.roundText,
+        turn: scene.currentTurn,
+        judgmentType: scene.judgmentType,
+        recommended: comparison.recommendedLabel,
+        actual: comparison.actualLabel,
+        recommendedEv: Number(comparison.recommended.totalEv),
+        actualEv: Number(comparison.actual.totalEv),
+        evGap: gap,
+        recommendedBreakdown: comparison.recommended,
+        actualBreakdown: comparison.actual,
+        sourcePosition: scene.sourcePosition
+      });
+    } catch (error) {
+      log(`EV batch skipped ${scene.roundText}/${scene.currentTurn}: ${error.stack || error}`);
+    }
+  }
+  currentEvAnalysis = results.sort((left, right) => right.evGap - left.evGap);
+  return { thresholdPercent: Number(thresholdPercent), total: currentEvAnalysis.length, items: currentEvAnalysis };
+}
+
+async function jumpToEvAnalysis(index) {
+  const item = currentEvAnalysis[Number(index)];
+  if (!item?.sourcePosition) throw new Error("移動先の局面が見つかりません。");
+  return goToDecision(item.sourcePosition);
 }
 
 async function ensureSimulation(scene) {
@@ -1350,6 +1500,7 @@ function registerIpc() {
     settings,
     scene: currentScene,
     simulation: currentSimulation,
+    evAnalysis: currentEvAnalysis,
     history: readJson(historyPath(), []),
     tileImages: tileDataUrls()
   }));
@@ -1364,6 +1515,7 @@ function registerIpc() {
     currentCardImages = null;
     currentRiskReadingPreview = null;
     currentDecisions = [];
+    currentEvAnalysis = [];
     await loadBigCoachReviewUrl(url);
     const history = saveReviewHistory(url);
     return { url, history };
@@ -1388,6 +1540,9 @@ function registerIpc() {
       comparison: comparisonStatus(scene, currentSimulation)
     };
   });
+  ipcMain.handle("analysis:ev-run", (_event, thresholdPercent) =>
+    runEvReviewAnalysis(thresholdPercent));
+  ipcMain.handle("analysis:ev-jump", (_event, index) => jumpToEvAnalysis(index));
   ipcMain.handle("settings:save", (_event, next) => saveSettings(next));
   ipcMain.handle("app:diagnose", () => diagnose());
   ipcMain.handle("stats:refresh", () => refreshStats());
