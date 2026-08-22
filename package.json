@@ -1,6 +1,6 @@
 {
   "name": "bigcoach-anki-studio",
-  "version": "0.6.12",
+  "version": "0.6.13",
   "description": "BigCoach解析結果から何切るシミュレーションとAnkiカード登録を行うWindowsアプリ",
   "author": "BigCoach Anki Studio",
   "main": "src/main.js",
