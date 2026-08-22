@@ -31,7 +31,7 @@ test("new simulator payload enables exact Shapley and maps tsumo share to ron ra
     tsumoWinSharePercent: 30
   }, false);
 
-  assert.equal(payload.version, "0.9.13");
+  assert.equal(payload.version, "0.9.14");
   assert.equal(payload.game_mode, 1);
   assert.equal(payload.calc_stats, true);
   assert.equal(payload.calc_yaku_stats, true);
