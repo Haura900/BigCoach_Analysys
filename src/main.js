@@ -602,8 +602,7 @@ async function analyzeScene(scene) {
 
 function sameTile(left, right) {
   if (!left || !right) return false;
-  const normalize = (tile) => String(tile).replace(/^0([mps])$/, "5$1");
-  return normalize(left) === normalize(right);
+  return left === right;
 }
 
 function candidateForTile(analysis, tile) {

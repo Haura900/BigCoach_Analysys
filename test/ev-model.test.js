@@ -78,7 +78,7 @@ test("EV review threshold handles red fives and distinct call shapes", () => {
   };
   assert.equal(isEvReviewCandidate(base, 0.001), true);
   assert.equal(isEvReviewCandidate(base, 0.0005), false);
-  assert.equal(isEvReviewCandidate({ ...base, recommendedDiscard: "5m" }, 0.001), false);
+  assert.equal(isEvReviewCandidate({ ...base, recommendedDiscard: "5m" }, 0.001), true);
 
   const call = {
     ...base,

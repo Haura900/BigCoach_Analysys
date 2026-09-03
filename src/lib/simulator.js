@@ -208,7 +208,7 @@ class SimulatorService {
         ...scene.riverTiles,
         ...scene.callTiles
       ];
-      payload.wall = wallCounts(removeKnownTiles(known));
+      payload.wall = wallCounts(removeKnownTiles(known, payload.enable_reddora), payload.enable_reddora);
     }
     return payload;
   }

@@ -189,9 +189,10 @@ function callFutureRiskEv(scene, isOpen, hyperparameters = DEFAULT_EV_HYPERPARAM
 function removeConsumedTiles(handTiles, consumed) {
   const hand = [...(handTiles || [])];
   for (const raw of consumed || []) {
-    const wanted = normalTile(raw);
-    const index = hand.findIndex((tile) => normalTile(tile) === wanted);
-    if (index >= 0) hand.splice(index, 1);
+    const wanted = normalizeTileCode(raw);
+    const index = hand.findIndex((tile) => normalizeTileCode(tile) === wanted);
+    if (index < 0) throw new Error(`副露に使う牌が手牌にありません: ${wanted}`);
+    hand.splice(index, 1);
   }
   return hand;
 }
@@ -204,13 +205,39 @@ function sceneForCallAction(scene, action) {
   if (type == null) throw new Error(`未対応の副露です: ${action.type}`);
   const called = action.pai ? normalizeTileCode(action.pai) : null;
   const consumed = (action.consumed || []).map(normalizeTileCode);
-  const meldTiles = [called, ...consumed].filter(Boolean);
+  const selfMelds = (scene.selfMelds || []).map((meld) => ({ ...meld, tiles: [...meld.tiles] }));
+  let meldTiles;
+  let handTiles;
+  if (action.type === "kakan") {
+    const index = selfMelds.findIndex((meld) => meld.type === 0 &&
+      meld.tiles.every((tile) => normalTile(TILE_INDEX_TO_CODE[tile]) === normalTile(called)));
+    if (!called || index < 0) throw new Error("加槓に対応するポンが見つかりません。");
+    handTiles = removeConsumedTiles(scene.handTiles, [called]);
+    meldTiles = [...selfMelds[index].tiles.map((tile) => TILE_INDEX_TO_CODE[tile]), called];
+    selfMelds[index] = { type, tiles: codesToIndices(meldTiles) };
+  } else {
+    handTiles = removeConsumedTiles(scene.handTiles, consumed);
+    meldTiles = action.type === "ankan" ? consumed : [called, ...consumed].filter(Boolean);
+    selfMelds.push({ type, tiles: codesToIndices(meldTiles) });
+  }
+  const expectedSize = [2, 3, 4].includes(type) ? 4 : 3;
+  if (meldTiles.length !== expectedSize) throw new Error("副露の牌数が不正です。");
+  const riverTiles = [...(scene.riverTiles || [])];
+  if (["chi", "pon", "daiminkan"].includes(action.type) && called) {
+    // The claimed discard moves from the river into the meld exactly once.
+    const index = riverTiles.lastIndexOf(called);
+    if (index >= 0) riverTiles.splice(index, 1);
+  }
+  const selfCallTiles = selfMelds.flatMap((meld) => meld.tiles.map((tile) => TILE_INDEX_TO_CODE[tile]));
+  const opponentCallTiles = scene.opponentCallTiles || removeConsumedTiles(
+    scene.callTiles || [], scene.selfCallTiles || []);
   return {
     ...scene,
-    handTiles: removeConsumedTiles(scene.handTiles, consumed),
-    selfCallTiles: [...(scene.selfCallTiles || []), ...meldTiles],
-    callTiles: [...(scene.callTiles || []), ...meldTiles],
-    selfMelds: [...(scene.selfMelds || []), { type, tiles: codesToIndices(meldTiles) }],
+    handTiles,
+    riverTiles,
+    selfCallTiles,
+    callTiles: [...selfCallTiles, ...opponentCallTiles],
+    selfMelds,
     actualDiscard: null,
     recommendedDiscard: null,
     candidates: []
@@ -229,8 +256,8 @@ function isOpponentGenbutsuWait(candidate, scene) {
 
 function actionFingerprint(action) {
   if (!action) return "";
-  const consumed = (action.consumed || []).map(normalTile).filter(Boolean).sort();
-  return JSON.stringify([action.type || "", normalTile(action.pai) || "", consumed]);
+  const consumed = (action.consumed || []).map(normalizeTileCode).sort();
+  return JSON.stringify([action.type || "", action.pai ? normalizeTileCode(action.pai) : "", consumed]);
 }
 
 function isEvReviewCandidate(scene, threshold) {
@@ -238,7 +265,7 @@ function isEvReviewCandidate(scene, threshold) {
   const recommendedAction = scene.decisionActions?.recommended;
   const differs = actualAction || recommendedAction
     ? actionFingerprint(actualAction) !== actionFingerprint(recommendedAction)
-    : normalTile(scene.actualDiscard) !== normalTile(scene.recommendedDiscard);
+    : scene.actualDiscard !== scene.recommendedDiscard;
   if (!differs) return false;
   const actualFingerprint = actionFingerprint(actualAction);
   const actual = actualFingerprint

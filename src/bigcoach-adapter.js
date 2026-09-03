@@ -492,7 +492,7 @@
       drawTile: entry.tile ? normalizeTile(entry.tile) : null,
       riverTiles: currentRiverTiles.length
         ? currentRiverTiles
-        : [...(gameInfo?.game_info?.rivers || [])].flat().map(normalizeTile).filter(Boolean),
+        : riverTilesFromGameInfo(gameInfo),
       callTiles: [selfCallTiles, ...otherHandSets].flat(),
       opponentCallTiles,
       selfCallTiles,
@@ -851,7 +851,7 @@
         drawTile: entry?.tile ? normalizeTile(entry.tile) : null,
         riverTiles: currentRiverTiles.length
           ? currentRiverTiles
-          : [...(gameInfo?.game_info?.rivers || [])].flat().map(normalizeTile).filter(Boolean),
+          : riverTilesFromGameInfo(gameInfo),
         callTiles: callTilesBySeat.flat(),
         opponentCallTiles: callTilesBySeat.slice(1).flat(),
         selfCallTiles,

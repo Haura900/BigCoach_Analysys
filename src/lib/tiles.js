@@ -64,21 +64,25 @@ function createFullWall() {
   return wall;
 }
 
-function removeKnownTiles(knownCodes) {
-  const wall = createFullWall();
+function removeKnownTiles(knownCodes, enableRedDora = true) {
+  const wall = createFullWall().map((tile) => enableRedDora ? tile : normalizeForCount(tile));
   for (const raw of knownCodes || []) {
-    const code = normalizeTileCode(raw);
-    let index = wall.indexOf(code);
-    if (index < 0 && code[0] === "5") index = wall.indexOf(`0${code[1]}`);
-    if (index < 0 && code[0] === "0") index = wall.indexOf(`5${code[1]}`);
-    if (index >= 0) wall.splice(index, 1);
+    const code = enableRedDora ? normalizeTileCode(raw) : normalizeForCount(raw);
+    const index = wall.indexOf(code);
+    if (index < 0) throw new Error(`見えている牌の枚数が不正です: ${code}`);
+    wall.splice(index, 1);
   }
   return wall;
 }
 
-function wallCounts(codes) {
+function wallCounts(codes, enableRedDora = true) {
   const counts = Array(37).fill(0);
-  for (const code of codes || []) counts[TILE_CODE_TO_INDEX[normalizeTileCode(code)]] += 1;
+  for (const raw of codes || []) {
+    const code = normalizeTileCode(raw);
+    // Engine wall format: 5 includes its red copy; the red slot is an inner count.
+    counts[TILE_CODE_TO_INDEX[normalizeForCount(code)]] += 1;
+    if (enableRedDora && code[0] === "0") counts[TILE_CODE_TO_INDEX[code]] += 1;
+  }
   return counts;
 }
 
