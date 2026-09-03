@@ -111,7 +111,10 @@
     const expectedSize = ["ankan", "daiminkan", "kakan"].includes(type) ? 4 : 3;
     const raw = Array.isArray(meld?.tiles)
       ? meld.tiles
-      : [meld?.pai, ...(meld?.consumed || [])];
+      : [meld?.pai,
+        ...(type === "kakan" && meld?.consumed?.length === 2 && meld?.previous_pon_pai
+          ? [meld.previous_pon_pai] : []),
+        ...(meld?.consumed || [])];
     const tiles = raw.map(normalizeTile).filter(Boolean);
     if (type === "ankan" && tiles.length > 0 && tiles.length < expectedSize) {
       const concealedTile = normalizeForMeld(tiles[0]);

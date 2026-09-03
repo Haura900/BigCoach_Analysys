@@ -22,7 +22,7 @@ npm run dist
 
 ## Simulator engine
 
-0.6.16 は修正版エンジン 0.9.15 を同梱します。既知牌を引いた残り枚数から経過巡目を再度引いていた計算を修正し、赤5の残り枚数・赤5と普通の5の打牌比較・鳴き直後の河と副露・加槓の手牌変換を修正しました。山河反映時も、自分の暗槓4枚は残り枚数から除外します。過去バージョンの期待値とは数値が変わります。
+0.6.17 は修正版エンジン 0.9.15 を同梱します。既知牌を引いた残り枚数から経過巡目を再度引いていた計算を修正し、赤5の残り枚数・赤5と普通の5の打牌比較・鳴き直後の河と副露・加槓の手牌変換を修正しました。BigCoachの加槓で元のポンの牌が別項目に入る形式にも対応します。山河反映時も、自分の暗槓4枚は残り枚数から除外します。過去バージョンの期待値とは数値が変わります。
 
 The bundled simulator is pinned by `engine-lock.json` to a tagged release of `Haura900/mahjong-cpp`. Run `npm run engine:update` to download and verify that exact Windows artifact. Engine updates are intentional: update the lock file, run the tests and smoke test, then build the installer.
 
